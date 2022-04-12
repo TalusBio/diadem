@@ -4,6 +4,7 @@ import inspect
 import sqlite3
 import logging
 from pathlib import Path
+from collections import defaultdict
 
 import mokapot
 import numpy as np
@@ -12,6 +13,8 @@ from tqdm.auto import tqdm
 from . import utils
 from .masses import PeptideMasses
 from pyteomics.fasta import FASTA
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PeptideDB:
@@ -121,8 +124,18 @@ class PeptideDB:
         else:
             self._db_file = Path(db_file)
 
+        # Permutations for decoys:
+        self._perms = {
+            i: self._rng.shuffle(np.arange(i - 2))
+            for i in range(self._min_length, self._max_length)
+        }
+
         self._init_db()
-        self._build_db()
+        with self:
+            self._build_db()
+            self.res = self.cur.execute(
+                "SELECT COUNT(*) FROM peptides"
+            ).fetchone()
 
     def __enter__(self):
         """Connect to the database"""
@@ -146,7 +159,7 @@ class PeptideDB:
 
     def load_params(self):
         """Load initialization parameters from the database."""
-        return self.cur.execute("SELECT params FROM parameters")[0]
+        return self.cur.execute("SELECT params FROM parameters").fetchone()
 
     @property
     def cur(self):
@@ -181,60 +194,217 @@ class PeptideDB:
         self._db_file.unlink(missing_ok=True)
 
         # Create the database:
-        with self as db_conn:
-            self.cur.execute("CREATE TABLE parameters (params BLOB)")
+        with self:
+            self.cur.execute("PRAGMA foreign_keys=ON")
+            self.cur.execute("CREATE TABLE parameters (params BLOB);")
             pkl_params = pickle.dumps(self._params)
-            self.cur.execute("INSERT INTO parameters (?)", pkl_params)
-            self.cur.execute("CREATE TABLE fragments (mz INT, precursor INT)")
+            self.cur.execute(
+                """
+                INSERT INTO parameters (params)
+                VALUES (?);
+                """,
+                (pkl_params,),
+            )
+
+            self.cur.execute(
+                """
+                CREATE TABLE proteins (
+                    accession STRING UNIQUE,
+                    sequence STRING
+                );
+                """
+            )
+
+            self.cur.execute(
+                """
+                CREATE TABLE peptides (
+                    peptide_idx INT,
+                    protein_idx INT REFERENCES proteins(ROWID),
+                    start INT,
+                    end INT
+                );
+                """
+            )
+
+            self.cur.execute(
+                """
+                CREATE TABLE modpeptides (
+                    peptide_idx INT REFERENCES peptides(peptide_idx)
+                );
+                """
+            )
+
             self.cur.execute(
                 """
                 CREATE TABLE precursors (
-                    precursor INT,
-                    sequence STRING,
+                    modpeptide_idx INT REFERENCES modpeptides(ROWID),
                     charge INT,
-                    mz INT,
-                    decoy BOOL
-                )
+                    mz INT
+                );
                 """
             )
-            self.cur.commit()
 
-    def _digest_proteins(self):
-        """Digest proteins into peptides.
+            self.cur.execute(
+                """
+                CREATE TABLE fragments (
+                    mz INT,
+                    precursor_idx INT REFERENCES precursors(ROWID)
+                );
+                """
+            )
+
+            for aa, masses in self._variable_mods.items():
+                for mass in masses:
+                    mod = f"{aa}[{mass:+.4f}]".replace('"', '""')
+                    self.cur.execute(
+                        f"""
+                        ALTER TABLE modpeptides
+                        ADD COLUMN "{mod}" BLOB;
+                        """
+                    )
+
+            self.con.commit()
+
+    def _build_db(self):
+        """Build the database."""
+        peptides, proteins = self._read_fastas()
+        peptide_idx = 1
+        desc = "Building database"
+        for seq, prots in tqdm(peptides.items(), desc=desc, unit="peptides"):
+            prot_rows = [(p, proteins[p]) for p in prots]
+            self.cur.executemany(
+                """
+                INSERT OR IGNORE INTO proteins(accession, sequence)
+                VALUES (?, ?);
+                """,
+                prot_rows,
+            )
+
+            pep_rows = []
+            for prot in prots:
+                start = proteins[prot].find(seq)
+                end = start + len(seq)
+                pep_rows.append((peptide_idx, start, end, prot))
+
+            self.cur.executemany(
+                """
+                INSERT OR IGNORE INTO peptides
+                SELECT ?, proteins.ROWID, ?, ?
+                FROM proteins
+                WHERE accession = ?
+                LIMIT 1;
+                """,
+                pep_rows,
+            )
+            peptide_idx += 1
+
+            # for modseq in self._peptide_mods(seq):
+            #    pass
+
+            self.con.commit()
+
+    def _peptide_mods(self, seq):
+        """Get all modified forms of a peptide.
+
+        Yields
+        ------
+        str
+            The modified peptide sequence.
+        """
+        mod_pos = {}
+        for mod in self._variable_mods.keys():
+            pass
+
+        for x in [seq]:
+            yield x
+
+    def _read_fastas(self):
+        """Read the fasta files, digesting the protein sequence.
 
         Returns
         -------
-        set of str
-            The unique peptides.
+        peptides : dict of str, set of str
+            The proteins mapped to their peptides.
+        proteins : dict of str, str
+            The proteins mapped to their sequence.
         """
         peptides = {}
+        sequences = {}
         for fasta_file in self._fasta_files:
             with FASTA(str(fasta_file)) as fas:
-                for seq in fas:
-                    peptides |= mokapot.digest(
+                desc = "Digesting proteins"
+                for protein, seq in tqdm(fas, desc=desc, unit="proteins"):
+                    protein = protein.split(" ")[0]
+                    peps = mokapot.digest(
                         seq,
-                        self._enzyme,
-                        self._missed_cleavages,
-                        True,
-                        self._min_length,
-                        self._max_length,
-                        self._semi,
+                        enzyme_regex=self._enzyme,
+                        missed_cleavages=self._missed_cleavages,
+                        clip_nterm_methionine=True,
+                        min_length=self._min_length,
+                        max_length=self._max_length,
+                        semi=self._semi,
                     )
 
-        return peptides
+                    if peps:
+                        sequences[protein] = seq
+                        peptides[protein] = peps
 
-    def _add_peptide(self, seq):
-        """Fragment a peptide and add it to the database.
+        peptides = _group_proteins(peptides)
+        proteins = {}
+        for prot in set().union(*peptides.values()):
+            proteins[prot] = sequences[prot.split(";")[0]]
 
-        Parameter
-        ---------
-        seq : str
-            The peptide sequence
-        """
-        for charge in self._charge_states:
-            pass
+        LOGGER.info(
+            "Found %i protein groups with %i peptides.",
+            len(proteins),
+            len(peptides),
+        )
+        return peptides, proteins
 
 
-def _modify_peptide(seq, mods, max_mods):
-    """Get all modification states of a peptide"""
-    pass
+def _group_proteins(proteins):
+    """Group proteins with proper subsets.
+
+    Parameters
+    ----------
+    proteins : dict of str, set of str
+       A map of proteins to their peptides.
+
+    Returns
+    -------
+    peptides : dict str, set of str
+        The peptides mapped to their protein groups.
+    """
+    # This is very similar to the counterpart in mokapot.
+    peptides = defaultdict(set)
+    for prot, peps in proteins.items():
+        for pep in peps:
+            peptides[pep].add(prot)
+
+    grouped = {}
+    for prot, peps in sorted(proteins.items(), key=lambda x: -len(x[1])):
+        if not grouped:
+            grouped[prot] = peps
+            continue
+
+        matches = set.intersection(*[peptides[p] for p in peps])
+        matches = [m for m in matches if m in grouped]
+
+        # If the entry is unique:
+        if not matches:
+            grouped[prot] = peps
+            continue
+
+        # Create new entries from subsets:
+        for match in matches:
+            new_prot = ";".join([match, prot])
+            grouped[new_prot] = grouped.pop(match)
+
+            # Update peptides
+            for pep in grouped[new_prot]:
+                peptides[pep].remove(match)
+                peptides[pep].add(new_prot)
+                if prot in peptides[pep]:
+                    peptides[pep].remove(prot)
+
+    return peptides
