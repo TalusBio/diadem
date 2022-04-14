@@ -10,10 +10,10 @@ from collections import defaultdict
 import mokapot
 import numpy as np
 from tqdm.auto import tqdm
+from pyteomics.fasta import FASTA
 
 from . import utils
 from .masses import PeptideMasses
-from pyteomics.fasta import FASTA
 
 LOGGER = logging.getLogger(__name__)
 
@@ -94,9 +94,11 @@ class PeptideDB:
 
         # Save the initialization parameters:
         frame = inspect.currentframe()
-        args, _, _, values = inspect.getargvalues(frame)
-        self._params = {k: v for k, v in zip(args, values)}
-        del self._params["force_"]  # We don't want to keep this one.
+        *_, self._params = inspect.getargvalues(frame)
+        for key in ["force_", "frame", "self"]:
+            del self._params[key]
+
+        print(self._params)
 
         # Set simple private attributes:
         self._fasta_files = utils.listify(fasta_files)
@@ -147,10 +149,10 @@ class PeptideDB:
             for i in range(self._min_length, self._max_length + 1)
         }
 
-        print(self._perms[6])
-        self._init_db()
-        with self:
-            self._build_db()
+        skip_build = self._init_db()
+        if not skip_build:
+            with self:
+                self._build_db()
 
     def __enter__(self):
         """Connect to the database"""
@@ -160,6 +162,58 @@ class PeptideDB:
     def __exit__(self, *args):
         """Close the database connection"""
         self.close()
+
+    @property
+    def params(self):
+        """A dict of parameters used to initialize the PeptideDB"""
+        return self._params
+
+    @property
+    def cur(self):
+        """The database cursor"""
+        return self._cur
+
+    @property
+    def con(self):
+        """The database connection"""
+        return self._con
+
+    @staticmethod
+    def load_params(db_file):
+        """Load the parameters used to generate a PeptideDB.
+
+        Parameters
+        ----------
+        db_file : str of Path
+            The database file to load.
+
+        Returns
+        -------
+        dict
+            A dictionary of the parameters used to initialize the PeptideDB.
+        """
+        with sqlite3.connect(db_file) as con:
+            cur = con.cursor()
+            params = cur.execute("SELECT params FROM parameters").fetchone()
+
+        return pickle.loads(params[0])
+
+    @classmethod
+    def from_file(cls, db_file):
+        """Load previously created PeptideDB.
+
+        Parameters
+        ----------
+        db_file : str or Path
+            The database file to load.
+
+        Returns
+        -------
+        PeptideDB
+            The loaded PeptideDB.
+        """
+        params = cls.load_params(db_file)
+        return cls(force_=False, **params)
 
     def connect(self):
         """Connect to the database."""
@@ -172,26 +226,12 @@ class PeptideDB:
         self._con = None
         self._cur = None
 
-    def load_params(self):
-        """Load initialization parameters from the database."""
-        return self.cur.execute("SELECT params FROM parameters").fetchone()
-
-    @property
-    def cur(self):
-        """The database cursor"""
-        return self._cur
-
-    @property
-    def con(self):
-        """The database connection"""
-        return self._con
-
     def fragment_to_precursor(self, frag_mz, tol=10, prec_mz=None):
         """Find peptides matching a fragment mass
 
         Parameters
         ----------
-        frag_mz : float
+        frag_mz : float or int
             The m/z of a fragment ion to look up.
         tol : float
             The tolerance to use in ppm.
@@ -207,9 +247,12 @@ class PeptideDB:
             so it can easily be used with the sqlite3
             `executemany()` method.
         """
-        ppm = tol * frag_mz / 1e6
-        min_mz = utils.mz2int(frag_mz - ppm)
-        max_mz = utils.mz2int(frag_mz + ppm)
+        if not isinstance(frag_mz, int):
+            frag_mz = utils.mz2int(frag_mz)
+
+        ppm = int(tol * frag_mz / 1e6)
+        min_mz = frag_mz - ppm
+        max_mz = frag_mz + ppm
 
         # For open modifications searching:
         if prec_mz is None:
@@ -239,22 +282,51 @@ class PeptideDB:
 
         return ret.fetchall()
 
-    def precursor_to_fragments(precursor_idx):
-        pass
+    def precursor_to_fragments(self, precursor_idx, to_float=False):
+        """Find the fragments for a precursor.
+
+        Parameters
+        ----------
+        precursor_idx : int
+            The index of the precursor.
+        to_float : bool
+            Convert the integerized masses back to m/z?
+
+        Returns
+        -------
+        list of int or float
+            The fragment m/z.
+        """
+        ret = self.con.execute(
+            """
+            SELECT DISTINCT mz
+            FROM fragments
+            WHERE precursor_idx = ?;
+            """,
+            (precursor_idx,),
+        )
+
+        if to_float:
+            return [utils.int2mz(f[0]) for f in ret]
+
+        return [f[0] for f in ret]
 
     def _init_db(self):
         """Create a database file, only if needed.
 
         Check if the file already exists and if it does, verify that it has
         matching parameters. Otherwise, raise an error if force_ is not used.
+
+        Returns
+        -------
+        bool
+            True if the file already exists and False otherwise.
         """
         if self._db_file.exists() and not self._force:
             try:
-                with self as db_conn:
-                    db_params = db_conn.load_params()
-
+                db_params = self.load_params(self._db_file)
                 assert self._params == db_params
-                return
+                return True
 
             except AssertionError:
                 raise FileExistsError(
@@ -338,6 +410,7 @@ class PeptideDB:
                     )
 
             self.con.commit()
+            return False
 
     def _build_db(self):
         """Build the database."""
@@ -467,8 +540,14 @@ class PeptideDB:
         mod_lists = [self._mod_strings[aa] for aa in seq]
         for mod_pep in itertools.product(*mod_lists):
             mod_blobs = []
+            n_mods = 0
             for mod_col in self._mod_cols:
-                blob = utils.bools2bytes([aa == mod_col for aa in mod_pep])
+                bool_array = [aa == mod_col for aa in mod_pep]
+                n_mods += sum(bool_array)
+                if n_mods > self._max_mods:
+                    continue
+
+                blob = utils.bools2bytes(bool_array)
                 mod_blobs.append(blob)
 
             yield "".join(mod_pep), mod_blobs
