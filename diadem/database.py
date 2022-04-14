@@ -282,15 +282,15 @@ class PeptideDB:
 
         return ret.fetchall()
 
-    def precursor_to_fragments(self, precursor_idx, to_float=False):
+    def precursor_to_fragments(self, precursor_idx, to_int=False):
         """Find the fragments for a precursor.
 
         Parameters
         ----------
         precursor_idx : int
             The index of the precursor.
-        to_float : bool
-            Convert the integerized masses back to m/z?
+        to_int : bool
+            Report the m/z as a fixed precision integer?
 
         Returns
         -------
@@ -306,7 +306,7 @@ class PeptideDB:
             (precursor_idx,),
         )
 
-        if to_float:
+        if not to_int:
             return [utils.int2mz(f[0]) for f in ret]
 
         return [f[0] for f in ret]
