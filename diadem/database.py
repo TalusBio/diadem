@@ -3,6 +3,7 @@ import pickle
 import inspect
 import sqlite3
 import logging
+import itertools
 from pathlib import Path
 from collections import defaultdict
 
@@ -56,6 +57,8 @@ class PeptideDB:
     semi : bool, optional
         Require only on enzymatic terminus. Note that the protein database may
         become very large if set to True.
+    decoy_prefix : str, optional
+        The prefix prepended to decoy protein names.
     rng : int or numpy.random.Generator, optional
         The seed or generator to use for decoy generation.
     force_ : bool, optional
@@ -80,6 +83,7 @@ class PeptideDB:
         max_length=50,
         charge_states=(2, 3),
         semi=False,
+        decoy_prefix="decoy_",
         rng=None,
         force_=False,
     ):
@@ -105,6 +109,8 @@ class PeptideDB:
         self._semi = bool(semi)
         self._force = bool(force_)
         self._rng = np.random.default_rng(rng)
+        self._decoy_prefix = decoy_prefix
+        self._mod_cols = None
 
         # Set static modifications
         if static_mods is not None:
@@ -118,6 +124,17 @@ class PeptideDB:
                 k: utils.listify(v) for k, v in variable_mods.items()
             }
 
+        # Also create the modification strings:
+        self._mod_strings = defaultdict(list)
+        for aa in self._pepcalc.masses:
+            masses = list(self._variable_mods.get(aa, []))
+            masses.append(None)
+            for mass in masses:
+                if mass is not None:
+                    self._mod_strings[aa].append(f"{aa}{mass:+.4f}")
+                else:
+                    self._mod_strings[aa].append(aa)
+
         # Prepare the database file:
         if db_file is None:
             self._db_file = Path(Path(self._fasta_files[0]).stem + ".db")
@@ -126,16 +143,14 @@ class PeptideDB:
 
         # Permutations for decoys:
         self._perms = {
-            i: self._rng.shuffle(np.arange(i - 2))
-            for i in range(self._min_length, self._max_length)
+            i: [0] + list(self._rng.permutation(np.arange(1, i - 1))) + [-1]
+            for i in range(self._min_length, self._max_length + 1)
         }
 
+        print(self._perms[6])
         self._init_db()
         with self:
             self._build_db()
-            self.res = self.cur.execute(
-                "SELECT COUNT(*) FROM peptides"
-            ).fetchone()
 
     def __enter__(self):
         """Connect to the database"""
@@ -170,6 +185,62 @@ class PeptideDB:
     def con(self):
         """The database connection"""
         return self._con
+
+    def fragment_to_precursor(self, frag_mz, tol=10, prec_mz=None):
+        """Find peptides matching a fragment mass
+
+        Parameters
+        ----------
+        frag_mz : float
+            The m/z of a fragment ion to look up.
+        tol : float
+            The tolerance to use in ppm.
+        prec_mz : tuple of float
+            The precursor m/z range to consider. None considers
+            everything.
+
+        Returns
+        -------
+        list of tuple int
+            The indices of precursors with matching fragments.
+            This is a list of tuples instead of a list of int
+            so it can easily be used with the sqlite3
+            `executemany()` method.
+        """
+        ppm = tol * frag_mz / 1e6
+        min_mz = utils.mz2int(frag_mz - ppm)
+        max_mz = utils.mz2int(frag_mz + ppm)
+
+        # For open modifications searching:
+        if prec_mz is None:
+            ret = self.con.execute(
+                """
+                SELECT DISTINCT precursor_idx FROM fragments
+                WHERE mz BETWEEN ? AND ?;
+                """,
+                (min_mz, max_mz),
+            )
+            return ret.fetchall()
+
+        # For closed searching:
+        prec_min_mz = utils.mz2int(prec_mz[0])
+        prec_max_mz = utils.mz2int(prec_mz[1])
+        ret = self.con.execute(
+            """
+            SELECT DISTINCT fragments.precursor_idx
+            FROM fragments
+            JOIN precursors
+            ON fragments.precursor_idx=precursors.ROWID
+            WHERE precursors.mz BETWEEN ? AND ?
+            AND fragments.mz BETWEEN ? AND ?;
+            """,
+            (prec_min_mz, prec_max_mz, min_mz, max_mz),
+        )
+
+        return ret.fetchall()
+
+    def precursor_to_fragments(precursor_idx):
+        pass
 
     def _init_db(self):
         """Create a database file, only if needed.
@@ -221,7 +292,8 @@ class PeptideDB:
                     peptide_idx INT,
                     protein_idx INT REFERENCES proteins(ROWID),
                     start INT,
-                    end INT
+                    end INT,
+                    target BOOL
                 );
                 """
             )
@@ -253,9 +325,11 @@ class PeptideDB:
                 """
             )
 
+            self._mod_cols = []
             for aa, masses in self._variable_mods.items():
                 for mass in masses:
                     mod = f"{aa}[{mass:+.4f}]".replace('"', '""')
+                    self._mod_cols.append(mod)
                     self.cur.execute(
                         f"""
                         ALTER TABLE modpeptides
@@ -268,40 +342,119 @@ class PeptideDB:
     def _build_db(self):
         """Build the database."""
         peptides, proteins = self._read_fastas()
-        peptide_idx = 1
+        peptide_idx = 0
+        modpeptide_idx = 0
+        prec_idx = 0
+        commit_counter = 0
+        prot_rows = []
+        pep_rows = []
+        mod_rows = []
+        prec_rows = []
+        frag_rows = []
         desc = "Building database"
-        for seq, prots in tqdm(peptides.items(), desc=desc, unit="peptides"):
-            prot_rows = [(p, proteins[p]) for p in prots]
-            self.cur.executemany(
-                """
-                INSERT OR IGNORE INTO proteins(accession, sequence)
-                VALUES (?, ?);
-                """,
-                prot_rows,
-            )
+        unit = "peptides"
+        for target, prots in tqdm(peptides.items(), desc=desc, unit=unit):
+            # Proteins
+            prot_rows += [(p, proteins[p]) for p in prots]
+            prot_starts = [[proteins[p].find(target) for p in prots]]
 
-            pep_rows = []
-            for prot in prots:
-                start = proteins[prot].find(seq)
-                end = start + len(seq)
-                pep_rows.append((peptide_idx, start, end, prot))
+            # Create a decoy peptide and see if it exists:
+            decoy = self._generate_decoy(target)
+            if decoy not in peptides:
+                seqs = [target, decoy]
+                is_target = [True, False]
+                prot_starts *= 2
+            else:
+                seqs = [target]
+                is_target = [True]
 
-            self.cur.executemany(
-                """
-                INSERT OR IGNORE INTO peptides
-                SELECT ?, proteins.ROWID, ?, ?
-                FROM proteins
-                WHERE accession = ?
-                LIMIT 1;
-                """,
-                pep_rows,
-            )
-            peptide_idx += 1
+            for seq, tval, starts in zip(seqs, is_target, prot_starts):
+                peptide_idx += 1  # Increment peptides
+                for start, prot in zip(starts, prots):
+                    end = start + len(seq)
+                    pep_rows.append((peptide_idx, start, end, prot, tval))
 
-            # for modseq in self._peptide_mods(seq):
-            #    pass
+                # Modified Peptides
+                for modseq, modblobs in self._peptide_mods(seq):
+                    modpeptide_idx += 1  # Increment modified peptides
+                    mod_rows.append((peptide_idx, *modblobs))
+                    # Precursors
+                    for charge in self._charge_states:
+                        prec_idx += 1  # increment precursors
+                        prec_mz = next(
+                            self._pepcalc.precursor(modseq, charge, 1)
+                        )
+                        prec_rows.append(
+                            (modpeptide_idx, charge, utils.mz2int(prec_mz))
+                        )
+                        frag_rows += [
+                            (utils.mz2int(f), prec_idx)
+                            for f in self._pepcalc.fragments(modseq, charge)
+                        ]
 
-            self.con.commit()
+            commit_counter += 1
+            if commit_counter >= 10000:
+                self._update_db(
+                    prot_rows,
+                    pep_rows,
+                    mod_rows,
+                    prec_rows,
+                    frag_rows,
+                )
+                commit_counter = 0
+                prot_rows = []
+                pep_rows = []
+                mod_rows = []
+                prec_rows = []
+                frag_rows = []
+
+        self._update_db(prot_rows, pep_rows, mod_rows, prec_rows, frag_rows)
+        self.con.commit()
+
+    def _update_db(self, prot_rows, pep_rows, mod_rows, prec_rows, frag_rows):
+        """Update the db."""
+        self.cur.executemany(
+            """
+            INSERT OR IGNORE INTO proteins(accession, sequence)
+            VALUES (?, ?);
+            """,
+            prot_rows,
+        )
+
+        self.cur.executemany(
+            """
+            INSERT OR IGNORE INTO peptides
+            SELECT ?, proteins.ROWID, ?, ?, ?
+            FROM proteins
+            WHERE accession = ?
+            LIMIT 1;
+            """,
+            pep_rows,
+        )
+
+        self.cur.executemany(
+            f"""
+            INSERT OR IGNORE INTO modpeptides
+            VALUES ({"?, "*len(self._mod_cols)}?)
+            """,
+            mod_rows,
+        )
+
+        self.cur.executemany(
+            """
+            INSERT OR IGNORE INTO precursors
+            VALUES (?, ?, ?)
+            """,
+            prec_rows,
+        )
+
+        self.cur.executemany(
+            """
+            INSERT OR IGNORE INTO fragments
+            VALUES (?, ?)
+            """,
+            frag_rows,
+        )
 
     def _peptide_mods(self, seq):
         """Get all modified forms of a peptide.
@@ -311,12 +464,14 @@ class PeptideDB:
         str
             The modified peptide sequence.
         """
-        mod_pos = {}
-        for mod in self._variable_mods.keys():
-            pass
+        mod_lists = [self._mod_strings[aa] for aa in seq]
+        for mod_pep in itertools.product(*mod_lists):
+            mod_blobs = []
+            for mod_col in self._mod_cols:
+                blob = utils.bools2bytes([aa == mod_col for aa in mod_pep])
+                mod_blobs.append(blob)
 
-        for x in [seq]:
-            yield x
+            yield "".join(mod_pep), mod_blobs
 
     def _read_fastas(self):
         """Read the fasta files, digesting the protein sequence.
@@ -339,7 +494,7 @@ class PeptideDB:
                         seq,
                         enzyme_regex=self._enzyme,
                         missed_cleavages=self._missed_cleavages,
-                        clip_nterm_methionine=True,
+                        clip_nterm_methionine=False,
                         min_length=self._min_length,
                         max_length=self._max_length,
                         semi=self._semi,
@@ -349,7 +504,7 @@ class PeptideDB:
                         sequences[protein] = seq
                         peptides[protein] = peps
 
-        peptides = _group_proteins(peptides)
+        peptides = group_proteins(peptides)
         proteins = {}
         for prot in set().union(*peptides.values()):
             proteins[prot] = sequences[prot.split(";")[0]]
@@ -361,8 +516,23 @@ class PeptideDB:
         )
         return peptides, proteins
 
+    def _generate_decoy(self, seq):
+        """Shuffle target peptides returning a set of decoys.
 
-def _group_proteins(proteins):
+        Parameters
+        ----------
+        seq : str
+            The target peptide sequence.
+
+        Returns
+        -------
+        str
+            The decoy peptide sequence.
+        """
+        return "".join(seq[i] for i in self._perms[len(seq)])
+
+
+def group_proteins(proteins):
     """Group proteins with proper subsets.
 
     Parameters
