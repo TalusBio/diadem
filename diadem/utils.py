@@ -50,7 +50,7 @@ def bytes2bools(byte_obj):
     return [b == "1" for b in bitstring[2:]]
 
 
-def mz2int(moverz, precision=4):
+def mz2int(moverz, precision=5):
     """Convert an m/z to an int
 
     Parameters
@@ -68,7 +68,7 @@ def mz2int(moverz, precision=4):
     return int(moverz * 10**precision)
 
 
-def int2mz(mzint, precision=4):
+def int2mz(mzint, precision=5):
     """Convert an integer to the m/z.
 
     Parameters

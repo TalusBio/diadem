@@ -25,22 +25,10 @@ class PeptideMasses:
     ----------
     masses : dict of str, float
         The masses of amino acid residues.
-    hydrogen : float
-        The mass of hydrogen.
-    oxygen : float
-        The mass of oxygen.
-    oh : float
-        The mass of OH.
-    h2o : float
-        The mass of water, H2O.
-    proton : float
-        The mass of a proton.
-    c13_diff : float
-        The mass difference between C13 from C12.
     """
 
     _seq_regex = r"([A-Z]|[+-][\d\.]*)"
-    _masses = {
+    masses = {
         "n": 0.0,
         "G": 57.021463735,
         "A": 71.037113805,
@@ -69,7 +57,7 @@ class PeptideMasses:
 
     def __init__(self, masses=None):
         """Initialize the PeptideMasses object"""
-        self.masses = dict(self._masses)  # prevent updating the class :P
+        self.masses = dict(self.masses)  # prevent updating the class :P
         if masses is not None:
             self.masses.update(masses)
 
@@ -137,10 +125,12 @@ class PeptideMasses:
         list of float
             The amino acid masses, including modifications.
         """
-        out = []
+        out = [0]
         for aa in re.findall(self._seq_regex, seq):
             if aa not in self.masses:
                 out[-1] += float(aa)
+            elif aa in {"n", "c"}:
+                out[-1] += self.masses[aa]
             else:
                 out.append(self.masses[aa])
 
@@ -199,7 +189,7 @@ def _calc_fragment_masses(seq, charge):
         The m/z of the predicted b and y ions.
     """
     max_charge = min(charge, 2)
-    for idx in range(1, len(seq) - 1):
+    for idx in range(2, len(seq)):
         b_mass = sum(seq[:idx])
         y_mass = sum(seq[idx:]) + H2O
         for cur_charge in range(1, max_charge + 1):

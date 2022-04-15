@@ -52,6 +52,10 @@ class PeptideDB:
         The minimum peptide length to consider.
     max_length : int, optional
         The maximum peptide length to consider.
+    clip_nterm_methionine : bool, optional
+        Temove methionine residues that occur at the protein N-terminus.
+        Setting to `True` retains the original peptide and adds the clipped
+        peptide to the database.
     charge_states : list of int, optional
         The charge states to consider.
     semi : bool, optional
@@ -78,9 +82,10 @@ class PeptideDB:
         variable_mods=None,
         max_mods=3,
         enzyme="[KR]",
-        missed_cleavages=2,
+        missed_cleavages=1,
         min_length=6,
         max_length=50,
+        clip_nterm_methionine=True,
         charge_states=(2, 3),
         semi=False,
         decoy_prefix="decoy_",
@@ -90,7 +95,6 @@ class PeptideDB:
         """Initialize a PeptideDB."""
         self._con = None  # The database connection
         self._cur = None  # The database cursor.
-        self._built = False  # Indicate that the DB needs to be built.
 
         # Save the initialization parameters:
         frame = inspect.currentframe()
@@ -105,6 +109,7 @@ class PeptideDB:
         self._missed_cleavages = missed_cleavages
         self._min_length = min_length
         self._max_length = max_length
+        self._clip_nterm_methionine = clip_nterm_methionine
         self._charge_states = utils.listify(charge_states)
         self._semi = bool(semi)
         self._force = bool(force_)
@@ -125,15 +130,20 @@ class PeptideDB:
             }
 
         # Also create the modification strings:
+        self._mod_cols = []
         self._mod_strings = defaultdict(list)
         for aa in self._pepcalc.masses:
-            masses = list(self._variable_mods.get(aa, []))
+            masses = list(sorted(list(self._variable_mods.get(aa, []))))
             masses.append(None)
             for mass in masses:
                 if mass is not None:
-                    self._mod_strings[aa].append(f"{aa}{mass:+.4f}")
+                    mod_str = f"{aa}{mass:+.5f}"
+                    self._mod_strings[aa].append(mod_str)
+                    self._mod_cols.append(mod_str)
                 else:
                     self._mod_strings[aa].append(aa)
+
+        self.mod_cols = np.array([[self._mod_cols]])
 
         # Prepare the database file:
         if db_file is None:
@@ -147,8 +157,8 @@ class PeptideDB:
             for i in range(self._min_length, self._max_length + 1)
         }
 
-        skip_build = self._init_db()
-        if not skip_build:
+        self._built = self._init_db()
+        if not self._built:
             with self:
                 self._build_db()
 
@@ -371,7 +381,8 @@ class PeptideDB:
             self.cur.execute(
                 """
                 CREATE TABLE modpeptides (
-                    peptide_idx INT REFERENCES peptides(peptide_idx)
+                    peptide_idx INT REFERENCES peptides(peptide_idx),
+                    modifications BLOB
                 );
                 """
             )
@@ -395,18 +406,6 @@ class PeptideDB:
                 """
             )
 
-            self._mod_cols = []
-            for aa, masses in self._variable_mods.items():
-                for mass in masses:
-                    mod = f"{aa}[{mass:+.4f}]".replace('"', '""')
-                    self._mod_cols.append(mod)
-                    self.cur.execute(
-                        f"""
-                        ALTER TABLE modpeptides
-                        ADD COLUMN "{mod}" BLOB;
-                        """
-                    )
-
             self.con.commit()
             return False
 
@@ -422,9 +421,18 @@ class PeptideDB:
         mod_rows = []
         prec_rows = []
         frag_rows = []
+        skipped = []
+        missing_aas = set()
         desc = "Building database"
         unit = "peptides"
         for target, prots in tqdm(peptides.items(), desc=desc, unit=unit):
+            if not all(aa in self._pepcalc.masses for aa in target):
+                skipped.append((target, ", ".join(prots)))
+                missing_aas |= set(
+                    aa for aa in target if aa not in self._pepcalc.masses
+                )
+                continue
+
             # Proteins
             prot_rows += [(p, proteins[p]) for p in prots]
             prot_starts = [[proteins[p].find(target) for p in prots]]
@@ -446,9 +454,9 @@ class PeptideDB:
                     pep_rows.append((peptide_idx, start, end, prot, tval))
 
                 # Modified Peptides
-                for modseq, modblobs in self._peptide_mods(seq):
+                for modseq, modblob in self._peptide_mods(seq):
                     modpeptide_idx += 1  # Increment modified peptides
-                    mod_rows.append((peptide_idx, *modblobs))
+                    mod_rows.append((peptide_idx, modblob))
                     # Precursors
                     for charge in self._charge_states:
                         prec_idx += 1  # increment precursors
@@ -482,6 +490,15 @@ class PeptideDB:
         self._update_db(prot_rows, pep_rows, mod_rows, prec_rows, frag_rows)
         self.con.commit()
 
+        if skipped:
+            LOGGER.warning(
+                "The following peptides were skipped due to unrecongize "
+                "amino acids (%s):",
+                ", ".join(missing_aas),
+            )
+            for peptide, prots in skipped:
+                LOGGER.warning("  %s (%s)", peptide, prots)
+
     def _update_db(self, prot_rows, pep_rows, mod_rows, prec_rows, frag_rows):
         """Update the db."""
         self.cur.executemany(
@@ -504,9 +521,9 @@ class PeptideDB:
         )
 
         self.cur.executemany(
-            f"""
+            """
             INSERT OR IGNORE INTO modpeptides
-            VALUES ({"?, "*len(self._mod_cols)}?)
+            VALUES (?, ?);
             """,
             mod_rows,
         )
@@ -535,20 +552,18 @@ class PeptideDB:
         str
             The modified peptide sequence.
         """
+        seq = "n" + seq + "c"
         mod_lists = [self._mod_strings[aa] for aa in seq]
-        for mod_pep in itertools.product(*mod_lists):
-            mod_blobs = []
-            n_mods = 0
-            for mod_col in self._mod_cols:
-                bool_array = [aa == mod_col for aa in mod_pep]
-                n_mods += sum(bool_array)
-                if n_mods > self._max_mods:
-                    continue
+        pep_array = np.array(list(itertools.product(*mod_lists)))[None, :, :]
+        mod_array = pep_array == self._mod_cols
+        n_mods_array = mod_array.sum(axis=2).sum(axis=1)
 
-                blob = utils.bools2bytes(bool_array)
-                mod_blobs.append(blob)
+        for pep, mods, n_mods in zip(pep_array, mod_array, n_mods_array):
+            if self._max_mods is not None and n_mods >= self._max_mods:
+                continue
 
-            yield "".join(mod_pep), mod_blobs
+            blob = np.packbits(mods).tobytes()
+            yield "".join(pep[0]), blob
 
     def _read_fastas(self):
         """Read the fasta files, digesting the protein sequence.
@@ -567,11 +582,12 @@ class PeptideDB:
                 desc = "Digesting proteins"
                 for protein, seq in tqdm(fas, desc=desc, unit="proteins"):
                     protein = protein.split(" ")[0]
+                    seq = seq.upper()
                     peps = mokapot.digest(
                         seq,
                         enzyme_regex=self._enzyme,
                         missed_cleavages=self._missed_cleavages,
-                        clip_nterm_methionine=False,
+                        clip_nterm_methionine=self._clip_nterm_methionine,
                         min_length=self._min_length,
                         max_length=self._max_length,
                         semi=self._semi,
