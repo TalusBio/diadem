@@ -98,8 +98,6 @@ class PeptideDB:
         for key in ["force_", "frame", "self"]:
             del self._params[key]
 
-        print(self._params)
-
         # Set simple private attributes:
         self._fasta_files = utils.listify(fasta_files)
         self._max_mods = max_mods
