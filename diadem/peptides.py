@@ -19,7 +19,7 @@ LOGGER = logging.getLogger(__name__)
 class PeptideDB(Database):
     """The peptide database to search against.
 
-    Create a SQLite3 database containing the peptides and their fragment ions.
+    Create an SQLite3 database containing the peptides and their fragment ions.
     This database is structured as an inverted index, allowing us to quickly
     look up the peptides that may have generated a fragment ion.
 

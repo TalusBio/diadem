@@ -27,7 +27,6 @@ class Database(ABC):
         # Get the __init__ of the child instantiation:
         frame = inspect.currentframe().f_back
         *_, self._params = inspect.getargvalues(frame)
-        print(self._params)
         for key in ["force_", "__class__", "self"]:
             del self._params[key]
 
