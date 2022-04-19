@@ -1,7 +1,4 @@
 """A SQLite3 databse for DIA mass spectrometry data"""
-import pickle
-import inspect
-import sqlite3
 import logging
 from pathlib import Path
 
@@ -90,6 +87,34 @@ class DIARunDB(Database):
             )
             """
         )
+
+        self.cur.execute(
+            """
+            CREATE TABLE used_ions (
+                fragment_idx INT REFERENCES fragments(ROWID)
+            );
+            """
+        )
+
+    def reset(self):
+        """Reset the used_ions table."""
+        self.cur.execute("""DELETE FROM used_ions;""")
+        self.con.commit()
+
+    def remove_ions(self, frag_row):
+        """Add multiple fragment ions to the used_ion table.
+
+        Parameters
+        ----------
+        fragment_mzs : list of int
+            The integerized m/z
+
+        """
+        self.cur.executemany(
+            "INSERT INTO used_ions VALUES (?);",
+            [(f,) for f in utils.listify(frag_row)],
+        )
+        self.con.commit()
 
     def _build_db(self):
         """Build the database."""
