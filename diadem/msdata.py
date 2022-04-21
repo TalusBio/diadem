@@ -9,23 +9,10 @@ from tqdm.auto import tqdm
 from pyteomics.mzml import MzML
 
 from . import utils
+from .feature import Feature
 from .database import Database
 
 LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
-class Feature:
-    """A chromatographic feature for a particular m/z"""
-
-    query_mz: int
-    mean_mz: int
-    row_ids: List[int]
-    ret_time: np.ndarray
-    intensity: np.ndarray
-    lower_bound: int = 0
-    upper_bound: int = -1
-    found: bool = True
 
 
 class DIARunDB(Database):
@@ -135,7 +122,10 @@ class DIARunDB(Database):
             The extracted features.
         """
         if ret_time is None:
-            ret_time = (0, np.inf)
+            ret_time = (0.0, 1e6)
+
+        indices, ret_times = self._rt2scans(*ret_time, window)
+        min_idx = min(indices)
 
         features = []
         for mz_val in utils.listify(mz_values):
@@ -145,30 +135,45 @@ class DIARunDB(Database):
             tol_val = int(tol * mz_val / 1e6)
             query = self.cur.execute(
                 """
-                SELECT TOP(1) fi.ROWID, fi.*, fr.scan_start_time
+                SELECT TOP(1) fi.ROWID, fi.mz, fi.intensity, fr.spectrum_idx
                     FROM fragment_ions AS fi
                 LEFT JOIN fragments AS fr
                     ON fi.spectrum_idx=fr.spectrum_idx
                 WHERE fi.mz BETWEEN ? AND ?
                     AND fr.scan_start_time BETWEEN ? AND ?
-                    AND f.isolation_window_lower <= ?
-                    AND f.isolation_window_upper >= ?
+                    AND fr.isolation_window_lower <= ?
+                    AND fr.isolation_window_upper >= ?
                 ORDER BY fr.spectrum_idx, fi.intensity DESC
                 GROUP BY fr.spectrum_idx;
                 """,
                 (mz_val - tol_val, mz_val + tol_val, *ret_time, *window),
             )
 
-            res = query.fetchall()
-            row_id, mz_array, int_array, spectra, ret_times = list(zip(*res))
+            if not query:
+                features.append(None)
+                continue
+
+            mz_array = np.array([np.nan] * len(ret_times))
+            row_array = np.array([np.nan] * len(ret_times))
+            int_array = np.zeros_like(ret_times)
+            for row_id, feat_mz_val, int_val, spec_idx in query:
+                idx = spec_idx - min_idx
+                mz_array[idx] = feat_mz_val
+                row_array[idx] = row_id
+                int_array[idx] = int_val
 
             mz_array = np.array(mz_array)
-            int_array = np.array(int_array)
-            ret_times = np.array(ret_times)
             feat = Feature(
                 query_mz=mz_val,
-                mean_mz=mz_array.mean(),
+                mean_mz=np.nanmean(mz_array),
+                row_ids=row_array.tolist(),
+                ret_times=ret_times.copy(),
+                intensities=int_array,
             )
+
+            features.append(feat)
+
+        return features
 
     def reset(self):
         """Reset the used_ions table."""
@@ -189,6 +194,45 @@ class DIARunDB(Database):
             [(f,) for f in utils.listify(frag_row)],
         )
         self.con.commit()
+
+    def _rt2scans(self, min_rt, max_rt, window=None):
+        """Get the scans for a DIA window at a specific retention time.
+
+        Parameters
+        ----------
+        min_rt : float
+            The lower bound of the retention time window.
+        max_rt : float
+            The upper bound of the retention time window.
+        window : tuple of float
+            The upper and lower bound of the DIA window. `None` will specify
+            precursors.
+
+        Returns
+        -------
+        indices : list of int
+            The scan indices for the scan of interest.
+        ret_times : np.array
+            The retention times
+        """
+        if window is None:
+            table = "precursors"
+        else:
+            table = "fragments"
+
+        indices = self.cur.execute(
+            f"""
+            SELECT UNIQUE spectrum_idx, scan_start_time FROM {table}
+            WHERE isolation_window_lower >= ?
+                AND isolation_window_upper <= ?
+                AND scan_start_time BETWEEN ? AND ?
+            ORDER BY spectrum_idx
+            """,
+            (*window, min_rt, max_rt),
+        )
+
+        indices, ret_times = list(zip(*indices.fetchall()))
+        return indices, np.array(ret_times)
 
     def _build_db(self):
         """Build the database."""

@@ -1,10 +1,22 @@
 """A class to score peptides"""
 import itertools
-from abc import ABC, abstractmethod
+from typing import List
+from dataclasses import dataclass
 
 import numpy as np
+import numba as nb
 
-from . import feature, utils
+from . import score_functions
+from .feature import Feature
+
+
+@dataclass
+class PeptideScore:
+    """The scores for a precursor"""
+
+    index: int
+    features: List[Feature]
+    score: float
 
 
 class PeptideSearcher:
@@ -13,10 +25,8 @@ class PeptideSearcher:
     pass
 
 
-class BaseWindowScorer(ABC):
+class WindowScorer:
     """Score peptides against features in the DIA mass spectrometry data.
-
-    Child classes implement specific score functions.
 
     Parameters
     ----------
@@ -34,9 +44,21 @@ class BaseWindowScorer(ABC):
         Open-modification search?
     min_corr : float, optional
         The minimum correlation for a feature group.
+    rng : int of numpy.random.Generator
+        The random number generator.
     """
 
-    def __init__(self, run, peptides, window_mz, width, tol, open_, min_corr):
+    def __init__(
+        self,
+        run,
+        peptides,
+        window_mz,
+        width=60.0,
+        tol=10,
+        open_=True,
+        min_corr=0.9,
+        rng=None,
+    ):
         """Initialize a BaseWindowScorer"""
         self._run = run
         self._peptides = peptides
@@ -45,42 +67,34 @@ class BaseWindowScorer(ABC):
         self._tol = tol
         self._open = bool(open_)
         self._min_corr = min_corr
+        self._rng = np.random.default_rng(rng)
+
+        self._score_function = score_functions.hyperscore
 
     def __iter__(self):
         """Iterate through the features in a run"""
         with self._run:
+            self._run.reset()
             while True:
-                peak = self._next_peak()
-                if peak[0] is None:
+                feature = self._next_peak()
+                if feature is None:
                     break
 
-                yield peak
+                yield feature
 
-    @abstractmethod
-    def score(self, areas):
-        """Score each precursor using a score function.
+            self._run.reset()
 
-        Pareameters
-        -----------
-        areas : list of numpy.ndarray
-            The intensities of the detected fragment ions. Each element in the
-            list corresponds to one precursor. Any undetected fragment ion will
-            be 0.
+    def search(self):
+        """Perform the database search
 
         Returns
         -------
-        list of float
-            The score for each precursor, where higher is bettter.
+        list of PeptideScore
+            The scored peptides
         """
-        pass
+        return [self._score_corr_features(f) for f in self if f is not None]
 
-    def search(self):
-        """Perform the database search"""
-        for feat_mz, area, bounds, spectra in self:
-            precursors, fragments = self._lookup_precursors(feat_mz)
-            peak_areas = self._find_corr_peaks(fragments, bounds, spectra)
-
-    def _find_corr_peaks(self, fragment_list, area, bounds, spectra):
+    def _score_corr_features(self, query_feature):
         """Find features that are correlated with the query feature.
 
         Parameters
@@ -96,11 +110,56 @@ class BaseWindowScorer(ABC):
 
         Returns
         -------
-        list of numpy.ndarray
-            The peak areas for all of the theoretical peaks of a precursor.
+        PeptideScore
+            The best score precursor for the feature.
         """
-        sizes = [len(l) for l in fragment_list]
-        fragment_list = itertools.chain.from_iterable(fragment_list)
+        with self._peptides:
+            precursors, frags = self._lookup_precursors(query_feature.mean_mz)
+
+        feat_sizes = [len(l) for l in frags]
+        fragments = itertools.chain.from_iterable(frags)
+        found_features = self._run.find_features(frags)
+        areas = []
+        for feature in found_features:
+            if feature is None:
+                areas.append(0.0)
+
+            feature.lower_bound = query_feature.lower_bound
+            feature.upper_bound = query_feature.upper_bound
+            corr = pearson_corr(query_feature.peak, feature.peak)
+            if corr > self._min_corr:
+                areas.append(feature.area)
+            else:
+                feature.append(0.0)
+
+        best_peptide = None
+        best_score = -np.inf
+        prev_stop = 0
+        for prec, n_feat in zip(precursors, feat_sizes):
+            pep_area = np.array(areas[prev_stop:n_feat])
+            score_val = self._score_function(pep_area)
+            if score_val < best_score:
+                continue
+
+            if score_val == best_score:
+                # Break ties randomly.
+                if self._rng.integers(1, endpoint=True):
+                    continue
+
+            pep_feat = [
+                f for f in found_features[prev_stop:n_feat] if f is not None
+            ]
+
+            best_peptide = PeptideScore(
+                index=prec,
+                features=pep_feat,
+                score=score_val,
+            )
+            prev_stop += n_feat
+
+        elim_mz = [f.row_ids for f in best_peptide.features]
+        self._run.remove_ions(itertools.chain.from_iterable(elim_mz))
+        return best_peptide
 
     def _lookup_precursors(self, fragment_mz):
         """Look up the precursor that generated a fragment m/z
@@ -169,38 +228,37 @@ class BaseWindowScorer(ABC):
 
         frag_mz, ret_time = top_query.fetch()
         if not frag_mz:
-            return None, None, None, None
+            return None
 
-        ppm = int(self._tol * frag_mz / 1e6)
-        min_mz = frag_mz - ppm
-        max_mz = frag_mz + ppm
         min_rt = ret_time - self._width
         max_rt = ret_time + self._width
-
-        feat_query = self._run.cur.execute(
-            """
-            SELECT TOP(1) fi.ROWID, fi.*, fr.scan_start_time
-                FROM fragment_ions AS fi
-            LEFT JOIN fragments AS fr
-                ON fi.spectrum_idx=fr.spectrum_idx
-            WHERE fi.mz BETWEEN ? AND ?
-                AND fr.scan_start_time BETWEEN ? AND ?
-                AND f.isolation_window_lower <= ?
-                AND f.isolation_window_upper >= ?
-            ORDER BY fr.spectrum_idx, fi.intensity DESC
-            GROUP BY fr.spectrum_idx;
-            """,
-            (min_mz, max_mz, min_rt, max_rt, *self._window_mz),
+        feature = self._run.find_features(
+            frag_mz,
+            self._window_mz,
+            (min_rt, max_rt),
         )
+        self._run.remove_ions(feature[0].row_ids)
+        return feature[0]
 
-        row_id, mz_array, int_array, spec_idx, ret_times = list(
-            zip(*feat_query.fetchall())
-        )
 
-        bounds = feature.build(int_array)
-        peak_area = feature.integrate(int_array, ret_times, bounds)
-        mean_mz = int(np.mean(mz_array[bounds[0] : bounds[1]]))
-        spectrum_bounds = (spec_idx[0], spec_idx[1])
-        self._run.remove_ions(row_id)
+@nb.njit
+def pearson_corr(x_array, y_array):
+    """Calcualte the Pearson correlation between two arrays.
 
-        return mean_mz, peak_area, bounds, spectrum_bounds
+    Parameters
+    ----------
+    x_array : numpy.ndarray
+    y_array : numpy.ndarray
+        The arrays to calculate the correlation between.
+
+    Returns
+    -------
+    float
+        The Pearson correlation coefficient.
+    """
+    x_diffs = x_array - x_array.mean()
+    y_diffs = y_array - y_array.mean()
+    coeff = np.sum(x_diffs * y_diffs) / np.sqrt(
+        np.sum(x_diffs**2) * np.sum(y_diffs**2)
+    )
+    return coeff
