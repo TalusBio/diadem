@@ -155,7 +155,7 @@ class PeptideDB(Database):
             with self:
                 self._build_db()
 
-    def fragment_to_precursor(self, frag_mz, tol=10, prec_mz=None):
+    def fragment_to_precursors(self, frag_mz, tol=10, prec_mz=None):
         """Find peptides matching a fragment mass
 
         Parameters
@@ -211,34 +211,40 @@ class PeptideDB(Database):
 
         return ret.fetchall()
 
-    def precursor_to_fragments(self, precursor_idx, to_int=False):
-        """Find the fragments for a precursor.
+    def precursors_to_fragments(self, precursor_idx, to_int=False):
+        """Find the fragments for each precursor.
 
         Parameters
         ----------
-        precursor_idx : int
-            The index of the precursor.
+        precursor_idx : list of int
+            The index of the precursors.
         to_int : bool
             Report the m/z as a fixed precision integer?
 
         Returns
         -------
-        list of int or float
-            The fragment m/z.
+        list of list of int or float
+            The fragment m/z for each precursor.
         """
-        ret = self.con.execute(
+        precursor_idx = [utils.listify(precursor_idx)]
+        ret = self.con.executemany(
             """
-            SELECT DISTINCT mz
+            SELECT DISTINCT mz, precursor_idx
             FROM fragments
             WHERE precursor_idx = ?;
+            ORDER BY mz
             """,
-            (precursor_idx,),
+            [(p,) for p in precursor_idx],
         )
 
-        if not to_int:
-            return [utils.int2mz(f[0]) for f in ret]
+        frag_dict = defaultdict(list)
+        for mz, prec_idx in ret:
+            if not to_int:
+                mz = utils.int2mz(mz)
 
-        return [f[0] for f in ret]
+            frag_dict[prec_idx].append(frag_dict)
+
+        return [frag_dict[p] for p in precursor_idx]
 
     def _create_tables(self):
         """Create the database tables"""

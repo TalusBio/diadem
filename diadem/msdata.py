@@ -1,7 +1,10 @@
 """A SQLite3 databse for DIA mass spectrometry data"""
 import logging
+from typing import List
 from pathlib import Path
+from dataclasses import dataclass
 
+import numpy as np
 from tqdm.auto import tqdm
 from pyteomics.mzml import MzML
 
@@ -9,6 +12,20 @@ from . import utils
 from .database import Database
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class Feature:
+    """A chromatographic feature for a particular m/z"""
+
+    query_mz: int
+    mean_mz: int
+    row_ids: List[int]
+    ret_time: np.ndarray
+    intensity: np.ndarray
+    lower_bound: int = 0
+    upper_bound: int = -1
+    found: bool = True
 
 
 class DIARunDB(Database):
@@ -95,6 +112,63 @@ class DIARunDB(Database):
             );
             """
         )
+
+    def find_features(self, mz_values, window, ret_time=None, tol=10):
+        """Find features in the DIA data.
+
+        Parameters
+        ----------
+        mz_values : list of float
+            The m/z values to find.
+        window : tuple of int
+            The precursor isolation window bounds. `None` will instead
+            look for the precursor signals.
+        ret_time : tuple of float
+            The retention time window to look in. `None` will search the
+            entire run.
+        tol : float
+            The matching tolerance in ppm.
+
+        Returns
+        -------
+        list of Features
+            The extracted features.
+        """
+        if ret_time is None:
+            ret_time = (0, np.inf)
+
+        features = []
+        for mz_val in utils.listify(mz_values):
+            if not isinstance(mz_val, int):
+                mz_val = utils.mz2int(mz_val)
+
+            tol_val = int(tol * mz_val / 1e6)
+            query = self.cur.execute(
+                """
+                SELECT TOP(1) fi.ROWID, fi.*, fr.scan_start_time
+                    FROM fragment_ions AS fi
+                LEFT JOIN fragments AS fr
+                    ON fi.spectrum_idx=fr.spectrum_idx
+                WHERE fi.mz BETWEEN ? AND ?
+                    AND fr.scan_start_time BETWEEN ? AND ?
+                    AND f.isolation_window_lower <= ?
+                    AND f.isolation_window_upper >= ?
+                ORDER BY fr.spectrum_idx, fi.intensity DESC
+                GROUP BY fr.spectrum_idx;
+                """,
+                (mz_val - tol_val, mz_val + tol_val, *ret_time, *window),
+            )
+
+            res = query.fetchall()
+            row_id, mz_array, int_array, spectra, ret_times = list(zip(*res))
+
+            mz_array = np.array(mz_array)
+            int_array = np.array(int_array)
+            ret_times = np.array(ret_times)
+            feat = Feature(
+                query_mz=mz_val,
+                mean_mz=mz_array.mean(),
+            )
 
     def reset(self):
         """Reset the used_ions table."""
