@@ -1,13 +1,16 @@
 """A class to score peptides"""
 import itertools
-from typing import List
+from typing import List, Union
 from dataclasses import dataclass
 
 import numpy as np
 import numba as nb
+from tqdm.auto import tqdm
 
 from . import score_functions
 from .feature import Feature
+from .peptides import PeptideDB
+from .msdata import DIARunDB
 
 
 @dataclass
@@ -17,12 +20,76 @@ class PeptideScore:
     index: int
     features: List[Feature]
     score: float
+    target: bool
 
 
 class PeptideSearcher:
-    """Score peptides against features in a the DIA mass spectrometry data."""
+    """Score peptides against features in a the DIA mass spectrometry data.
 
-    pass
+    Parameters
+    ----------
+    run : DIARunDB
+        The DIA data to use.
+    peptides : PeptideDB
+        The peptide inverted index to use.
+    width : float
+        The maximum width of a chromatographic peak in seconds.
+    tol : float
+        The fragment ion matching tolerance.
+    open_ : bool
+        Open-modification search?
+    min_corr : float, optional
+        The minimum correlation for a feature group.
+    rng : int or numpy.random.Generator, optional
+        The random number generator.
+    """
+
+    def __init__(
+        self,
+        run: DIARunDB,
+        peptides: PeptideDB,
+        width: float = 1.0,
+        tol: float = 10,
+        open_: bool = True,
+        min_corr: float = 0.9,
+        rng: Union[int, np.random.Generator, None] = None,
+    ) -> None:
+        """Initialize a PeptideSearcher"""
+        self._run = run
+        self._peptides = peptides
+        self._width = width
+        self._tol = tol
+        self._open = open_
+        self._min_corr = min_corr
+        self._rng = np.random.default_rng(rng)
+
+        with self._run:
+            self._windows = self._run.windows
+
+    def search(self) -> List[PeptideScore]:
+        """Search the data.
+
+        Returns
+        -------
+        list of PeptideScore objects
+            The scored peptides.
+        """
+        peptide_scores = []
+        for window in self._windows:
+            scorer = WindowScorer(
+                run=self._run,
+                peptides=self._peptides,
+                window_mz=window,
+                width=self._width,
+                tol=self._tol,
+                open_=self._open,
+                min_corr=self._min_corr,
+                rng=self._rng.integers(9999),
+            )
+            peptide_scores += scorer.search()
+            break
+
+        return peptide_scores
 
 
 class WindowScorer:
@@ -53,11 +120,11 @@ class WindowScorer:
         run,
         peptides,
         window_mz,
-        width=60.0,
-        tol=10,
-        open_=True,
-        min_corr=0.9,
-        rng=None,
+        width,
+        tol,
+        open_,
+        min_corr,
+        rng,
     ):
         """Initialize a BaseWindowScorer"""
         self._run = run
@@ -70,6 +137,11 @@ class WindowScorer:
         self._rng = np.random.default_rng(rng)
 
         self._score_function = score_functions.hyperscore
+        self._pbar = None
+        self._unmatched_peaks = 0
+
+        with self._run:
+            self._n_peaks = self._run.n_peaks
 
     def __iter__(self):
         """Iterate through the features in a run"""
@@ -92,7 +164,23 @@ class WindowScorer:
         list of PeptideScore
             The scored peptides
         """
-        return [self._score_corr_features(f) for f in self if f is not None]
+        scores = []
+        desc = (
+            f"Searching m/z {self._window_mz[0]:.2f}-"
+            f"{self._window_mz[1]:.2f}"
+        )
+        self._pbar = tqdm(
+            desc=desc,
+            unit="peaks",
+            total=self._n_peaks,
+        )
+        for feature in self:
+            pfm = self._score_corr_features(feature)
+            if pfm is not None:
+                scores.append(pfm)
+
+        self._pbar.close()
+        return scores
 
     def _score_corr_features(self, query_feature):
         """Find features that are correlated with the query feature.
@@ -117,8 +205,17 @@ class WindowScorer:
             precursors, frags = self._lookup_precursors(query_feature.mean_mz)
 
         feat_sizes = [len(l) for l in frags]
-        fragments = itertools.chain.from_iterable(frags)
-        found_features = self._run.find_features(frags)
+        frags = itertools.chain.from_iterable(frags)
+        found_features = self._run.find_features(
+            frags,
+            window=self._window_mz,
+            ret_time=(
+                query_feature.ret_times.min(),
+                query_feature.ret_times.max(),
+            ),
+            tol=self._tol,
+        )
+        print("found features.")
         areas = []
         for feature in found_features:
             if feature is None:
@@ -132,10 +229,12 @@ class WindowScorer:
             else:
                 feature.append(0.0)
 
+        print("got areas.")
+
         best_peptide = None
         best_score = -np.inf
         prev_stop = 0
-        for prec, n_feat in zip(precursors, feat_sizes):
+        for (prec, target), n_feat in zip(precursors, feat_sizes):
             pep_area = np.array(areas[prev_stop:n_feat])
             score_val = self._score_function(pep_area)
             if score_val < best_score:
@@ -146,7 +245,8 @@ class WindowScorer:
                 if self._rng.integers(1, endpoint=True):
                     continue
 
-            pep_feat = [
+            pep_feat = [query_feature]
+            pep_feat += [
                 f for f in found_features[prev_stop:n_feat] if f is not None
             ]
 
@@ -154,11 +254,17 @@ class WindowScorer:
                 index=prec,
                 features=pep_feat,
                 score=score_val,
+                target=target,
             )
             prev_stop += n_feat
 
-        elim_mz = [f.row_ids for f in best_peptide.features]
-        self._run.remove_ions(itertools.chain.from_iterable(elim_mz))
+        print("Found best peptide.")
+
+        elim_mz = itertools.chain.from_iterable(
+            [f.row_ids for f in best_peptide.features]
+        )
+        self._run.remove_ions(elim_mz)
+        self._pbar.update(len(elim_mz))
         return best_peptide
 
     def _lookup_precursors(self, fragment_mz):
@@ -187,8 +293,9 @@ class WindowScorer:
             prec_mz,
         )
 
+        prec_idx = [p[0] for p in precursors]
         fragments = self._peptides.precursors_to_fragments(
-            precursors,
+            prec_idx,
             to_int=True,
         )
 
@@ -212,21 +319,20 @@ class WindowScorer:
         """
         top_query = self._run.cur.execute(
             """
-            SELECT TOP(1) fi.mz, fr.scan_start_time
+            SELECT fi.mz, fr.scan_start_time, MAX(fi.intensity)
                 FROM fragment_ions AS fi
             LEFT JOIN fragments AS fr
                 ON fi.spectrum_idx=fr.spectrum_idx
             LEFT JOIN used_ions AS ui
-                ON ui.fragment_idx=fi.ROWID
-            WHERE f.isolation_window_lower <= ?
-                AND f.isolation_window_upper >= ?
+                ON fi.ROWID=ui.fragment_idx
+            WHERE fr.isolation_window_lower >= ?
+                AND fr.isolation_window_upper <= ?
                 AND ui.fragment_idx IS NULL
-            ORDER BY fi.intensity DESC;
             """,
             self._window_mz,
         )
 
-        frag_mz, ret_time = top_query.fetch()
+        frag_mz, ret_time, _ = top_query.fetchone()
         if not frag_mz:
             return None
 

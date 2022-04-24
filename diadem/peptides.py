@@ -145,15 +145,32 @@ class PeptideDB(Database):
 
         # Prepare the database file:
         if db_file is None:
-            self._db_file = (
-                Path(self._fasta_files[0]).stem + "diadem.peptides.db"
-            )
+            db_file = Path(self._fasta_files[0]).stem + ".diadem.peptides.db"
 
         # Initizliae the database:
         super().__init__(db_file, force_)
         if not self._built:
             with self:
                 self._build_db()
+
+    def protein_to_index(self, protein):
+        """Get the protein index for a protein accession.
+
+        Parameters
+        ----------
+        protein : str
+            The protein accession.
+
+        Returns
+        -------
+        int
+            The protein accession.
+        """
+        query = self.cur.execute(
+            "SELECT ROWID from proteins WHERE accession=?",
+            (protein,),
+        )
+        return query.fetchone()[0]
 
     def fragment_to_precursors(self, frag_mz, tol=10, prec_mz=None):
         """Find peptides matching a fragment mass
@@ -182,13 +199,19 @@ class PeptideDB(Database):
         ppm = int(tol * frag_mz / 1e6)
         min_mz = frag_mz - ppm
         max_mz = frag_mz + ppm
-
         # For open modifications searching:
         if prec_mz is None:
-            ret = self.con.execute(
+            ret = self.cur.execute(
                 """
-                SELECT DISTINCT precursor_idx FROM fragments
-                WHERE mz BETWEEN ? AND ?;
+                SELECT DISTINCT fr.precursor_idx, pep.target
+                    FROM fragments AS fr
+                LEFT JOIN precursors AS pr
+                    ON fr.precursor_idx=pr.ROWID
+                LEFT JOIN modpeptides AS mod
+                    ON pr.modpeptide_idx=mod.ROWID
+                LEFT JOIN peptides AS pep
+                    ON mod.peptide_idx=pep.peptide_idx
+                WHERE fr.mz BETWEEN ? AND ?;
                 """,
                 (min_mz, max_mz),
             )
@@ -197,14 +220,18 @@ class PeptideDB(Database):
         # For closed searching:
         prec_min_mz = utils.mz2int(prec_mz[0])
         prec_max_mz = utils.mz2int(prec_mz[1])
-        ret = self.con.execute(
+        ret = self.cur.execute(
             """
-            SELECT DISTINCT fragments.precursor_idx
-            FROM fragments
-            JOIN precursors
-            ON fragments.precursor_idx=precursors.ROWID
-            WHERE precursors.mz BETWEEN ? AND ?
-            AND fragments.mz BETWEEN ? AND ?;
+            SELECT DISTINCT fr.precursor_idx, pep.target
+                FROM fragments AS fr
+            LEFT JOIN precursors AS pr
+                ON fr.precursor_idx=pr.ROWID
+            LEFT JOIN modpeptides AS mod
+                ON pr.modpeptide_idx=mod.ROWID
+            LEFT JOIN peptides AS pep
+                ON mod.peptide_idx=pep.peptide_idx
+            WHERE pr.mz BETWEEN ? AND ?
+                AND fr.mz BETWEEN ? AND ?;
             """,
             (prec_min_mz, prec_max_mz, min_mz, max_mz),
         )
@@ -226,25 +253,29 @@ class PeptideDB(Database):
         list of list of int or float
             The fragment m/z for each precursor.
         """
-        precursor_idx = [utils.listify(precursor_idx)]
-        ret = self.con.executemany(
-            """
-            SELECT DISTINCT mz, precursor_idx
-            FROM fragments
-            WHERE precursor_idx = ?;
-            ORDER BY mz
-            """,
-            [(p,) for p in precursor_idx],
-        )
+        precursor_idx = utils.listify(precursor_idx)
+        frags = []
+        for idx in precursor_idx:
+            ret = self.cur.execute(
+                """
+                SELECT DISTINCT mz
+                FROM fragments
+                WHERE precursor_idx = ?
+                ORDER BY mz
+                """,
+                (idx,),
+            )
 
-        frag_dict = defaultdict(list)
-        for mz, prec_idx in ret:
-            if not to_int:
-                mz = utils.int2mz(mz)
+            prec_frags = []
+            for mz_val, *_ in ret:
+                if not to_int:
+                    mz_val = utils.int2mz(mz_val)
 
-            frag_dict[prec_idx].append(frag_dict)
+                prec_frags.append(mz_val)
 
-        return [frag_dict[p] for p in precursor_idx]
+            frags.append(prec_frags)
+
+        return frags
 
     def _create_tables(self):
         """Create the database tables"""
@@ -304,7 +335,6 @@ class PeptideDB(Database):
         modpeptide_idx = 0
         prec_idx = 0
         commit_counter = 0
-        prot_rows = []
         pep_rows = []
         mod_rows = []
         prec_rows = []
@@ -313,6 +343,18 @@ class PeptideDB(Database):
         missing_aas = set()
         desc = "Building database"
         unit = "peptides"
+
+        # Build the protein table:
+        self.cur.executemany(
+            """
+            INSERT OR IGNORE INTO proteins(accession, sequence)
+            VALUES (?, ?);
+            """,
+            list(proteins.items()),
+        )
+        self.con.commit()
+
+        # Create the other tables:
         for target, prots in tqdm(peptides.items(), desc=desc, unit=unit):
             if not all(aa in self._pepcalc.masses for aa in target):
                 skipped.append((target, ", ".join(prots)))
@@ -322,7 +364,6 @@ class PeptideDB(Database):
                 continue
 
             # Proteins
-            prot_rows += [(p, proteins[p]) for p in prots]
             prot_starts = [[proteins[p].find(target) for p in prots]]
 
             # Create a decoy peptide and see if it exists:
@@ -339,7 +380,7 @@ class PeptideDB(Database):
                 peptide_idx += 1  # Increment peptides
                 for start, prot in zip(starts, prots):
                     end = start + len(seq)
-                    pep_rows.append((peptide_idx, start, end, prot, tval))
+                    pep_rows.append((peptide_idx, start, end, tval, prot))
 
                 # Modified Peptides
                 for modseq, modblob in self._peptide_mods(seq):
@@ -362,20 +403,24 @@ class PeptideDB(Database):
             commit_counter += 1
             if commit_counter >= 10000:
                 self._update_db(
-                    prot_rows,
                     pep_rows,
                     mod_rows,
                     prec_rows,
                     frag_rows,
                 )
                 commit_counter = 0
-                prot_rows = []
                 pep_rows = []
                 mod_rows = []
                 prec_rows = []
                 frag_rows = []
 
-        self._update_db(prot_rows, pep_rows, mod_rows, prec_rows, frag_rows)
+        self._update_db(pep_rows, mod_rows, prec_rows, frag_rows)
+
+        # Create indices
+        LOGGER.info("Building database indices...")
+        self.cur.execute("CREATE INDEX frag_mz_idx ON fragments(mz)")
+        self.cur.execute("CREATE INDEX prec_idx ON fragments(precursor_idx)")
+        self.cur.execute("CREATE INDEX prec_mz_idx ON precursors(mz)")
         self.con.commit()
 
         if skipped:
@@ -387,16 +432,8 @@ class PeptideDB(Database):
             for peptide, prots in skipped:
                 LOGGER.warning("  %s (%s)", peptide, prots)
 
-    def _update_db(self, prot_rows, pep_rows, mod_rows, prec_rows, frag_rows):
+    def _update_db(self, pep_rows, mod_rows, prec_rows, frag_rows):
         """Update the db."""
-        self.cur.executemany(
-            """
-            INSERT OR IGNORE INTO proteins(accession, sequence)
-            VALUES (?, ?);
-            """,
-            prot_rows,
-        )
-
         self.cur.executemany(
             """
             INSERT OR IGNORE INTO peptides

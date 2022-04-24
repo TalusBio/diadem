@@ -47,6 +47,24 @@ class DIARunDB(Database):
             with self:
                 self._build_db()
 
+    @property
+    def windows(self):
+        """Retrieve the isolation windows used in the DIA experimetn."""
+        query = self.cur.execute(
+            """
+            SELECT DISTINCT isolation_window_lower, isolation_window_upper
+                FROM fragments
+            ORDER BY isolation_window_lower
+            """
+        )
+        return query.fetchall()
+
+    @property
+    def n_peaks(self):
+        """The number of fragment ion peaks"""
+        query = self.cur.execute("SELECT COUNT(*) FROM fragment_ions")
+        return query.fetchone()[0]
+
     def _create_tables(self):
         """Create the database tables."""
         self.cur.execute(
@@ -125,8 +143,6 @@ class DIARunDB(Database):
             ret_time = (0.0, 1e6)
 
         indices, ret_times = self._rt2scans(*ret_time, window)
-        min_idx = min(indices)
-
         features = []
         for mz_val in utils.listify(mz_values):
             if not isinstance(mz_val, int):
@@ -135,15 +151,14 @@ class DIARunDB(Database):
             tol_val = int(tol * mz_val / 1e6)
             query = self.cur.execute(
                 """
-                SELECT TOP(1) fi.ROWID, fi.mz, fi.intensity, fr.spectrum_idx
+                SELECT fi.ROWID, fi.mz, MAX(fi.intensity), fr.spectrum_idx
                     FROM fragment_ions AS fi
                 LEFT JOIN fragments AS fr
                     ON fi.spectrum_idx=fr.spectrum_idx
                 WHERE fi.mz BETWEEN ? AND ?
                     AND fr.scan_start_time BETWEEN ? AND ?
-                    AND fr.isolation_window_lower <= ?
-                    AND fr.isolation_window_upper >= ?
-                ORDER BY fr.spectrum_idx, fi.intensity DESC
+                    AND fr.isolation_window_lower >= ?
+                    AND fr.isolation_window_upper <= ?
                 GROUP BY fr.spectrum_idx;
                 """,
                 (mz_val - tol_val, mz_val + tol_val, *ret_time, *window),
@@ -157,16 +172,17 @@ class DIARunDB(Database):
             row_array = np.array([np.nan] * len(ret_times))
             int_array = np.zeros_like(ret_times)
             for row_id, feat_mz_val, int_val, spec_idx in query:
-                idx = spec_idx - min_idx
+                idx = indices.index(spec_idx)
                 mz_array[idx] = feat_mz_val
                 row_array[idx] = row_id
                 int_array[idx] = int_val
 
             mz_array = np.array(mz_array)
+            row_array = row_array[~np.isnan(row_array)].tolist()
             feat = Feature(
                 query_mz=mz_val,
-                mean_mz=np.nanmean(mz_array),
-                row_ids=row_array.tolist(),
+                mean_mz=int(np.nanmean(mz_array)),
+                row_ids=row_array,
                 ret_times=ret_times.copy(),
                 intensities=int_array,
             )
@@ -222,7 +238,7 @@ class DIARunDB(Database):
 
         indices = self.cur.execute(
             f"""
-            SELECT UNIQUE spectrum_idx, scan_start_time FROM {table}
+            SELECT DISTINCT spectrum_idx, scan_start_time FROM {table}
             WHERE isolation_window_lower >= ?
                 AND isolation_window_upper <= ?
                 AND scan_start_time BETWEEN ? AND ?
@@ -289,6 +305,25 @@ class DIARunDB(Database):
             fragments_rows,
             precursor_ions_rows,
             fragment_ions_rows,
+        )
+
+        # Create Indices
+        self.cur.execute(
+            """
+            CREATE INDEX frag_intensity_idx ON fragment_ions(intensity);
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX frag_mz_idx ON fragment_ions(mz);
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX frag_spec_idx ON fragments(spectrum_idx)
+            """
         )
         self.con.commit()
 
