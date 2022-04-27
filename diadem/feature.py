@@ -3,7 +3,7 @@ from typing import List, Union
 from dataclasses import dataclass
 
 import numpy as np
-import scipy as sp
+from scipy import signal
 
 FWHM_RATIO = 2 / 2.35482004503
 
@@ -59,8 +59,10 @@ class Feature:
     def background(self):
         """The median background intensity"""
         if self._background is None:
-            background = np.ma.array(self.intensities)
-            background.mask[self.lower_bound : self.upper_bound] = True
+            mask = np.zeros_like(self.intensities)
+            mask[self.lower_bound : self.upper_bound] = 1
+            print(mask)
+            background = np.ma.array(self.intensities, mask.tolist())
             self._background = np.median(background)
 
         return self._background
@@ -74,7 +76,7 @@ class Feature:
     def update_bounds(self) -> None:
         """Update the integration boundaries for a feature."""
         center = np.argmax(self.intensities)
-        width, *_ = sp.signal.peak_widths(self.intensities, [center], 0.5)
+        width, *_ = signal.peak_widths(self.intensities, [center], 0.5)
         sigma = width * FWHM_RATIO
         self.lower_bound = int(np.floor(center - sigma))
         self.upper_bound = int(np.ceil(center + sigma))

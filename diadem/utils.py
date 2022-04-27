@@ -1,6 +1,19 @@
 """Utility Functions"""
 
 
+def groupby_max(df, by_cols, max_col):
+    """Quickly get the indices for the maximum value of col"""
+    by_cols = listify(by_cols)
+    idx = (
+        df.sample(frac=1)
+        .sort_values(by_cols + [max_col], axis=0)
+        .drop_duplicates(by_cols, keep="last")
+        .index
+    )
+
+    return idx
+
+
 def listify(obj):
     """Turn an object into a list, but don't split strings"""
     try:

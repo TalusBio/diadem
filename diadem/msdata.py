@@ -113,7 +113,7 @@ class DIARunDB(Database):
         self.cur.execute(
             """
             CREATE TABLE used_ions (
-                fragment_idx INT REFERENCES fragments(ROWID)
+                fragment_idx INT REFERENCES fragment_ions(ROWID)
             );
             """
         )
@@ -142,29 +142,41 @@ class DIARunDB(Database):
         if ret_time is None:
             ret_time = (0.0, 1e6)
 
+        mz_values = utils.listify(mz_values)
         indices, ret_times = self._rt2scans(*ret_time, window)
+
         features = []
-        for mz_val in utils.listify(mz_values):
+        for mz_val in tqdm(mz_values):
             if not isinstance(mz_val, int):
                 mz_val = utils.mz2int(mz_val)
 
             tol_val = int(tol * mz_val / 1e6)
+
+            if len(mz_values) > 10000000000:
+                q = "EXPLAIN QUERY PLAN"
+            else:
+                q = ""
+
             query = self.cur.execute(
-                """
-                SELECT fi.ROWID, fi.mz, MAX(fi.intensity), fr.spectrum_idx
-                    FROM fragment_ions AS fi
-                LEFT JOIN fragments AS fr
+                f"""
+                {q}
+                SELECT fi.ROWID, fi.mz, fi.intensity, fr.spectrum_idx
+                    FROM (
+                        SELECT tmp.ROWID, tmp.mz, MAX(tmp.intensity) AS intensity, tmp.spectrum_idx
+                            FROM fragment_ions AS tmp
+                        WHERE tmp.mz BETWEEN ? AND ?
+                        GROUP BY tmp.spectrum_idx
+                    ) AS fi
+                JOIN fragments AS fr
                     ON fi.spectrum_idx=fr.spectrum_idx
-                WHERE fi.mz BETWEEN ? AND ?
-                    AND fr.scan_start_time BETWEEN ? AND ?
+                WHERE fr.scan_start_time BETWEEN ? AND ?
                     AND fr.isolation_window_lower >= ?
                     AND fr.isolation_window_upper <= ?
-                GROUP BY fr.spectrum_idx;
                 """,
                 (mz_val - tol_val, mz_val + tol_val, *ret_time, *window),
             )
 
-            if not query:
+            if len(mz_values) > 10000:
                 features.append(None)
                 continue
 
@@ -176,6 +188,10 @@ class DIARunDB(Database):
                 mz_array[idx] = feat_mz_val
                 row_array[idx] = row_id
                 int_array[idx] = int_val
+
+            if not (~np.isnan(mz_array)).sum():
+                features.append(None)
+                continue
 
             mz_array = np.array(mz_array)
             row_array = row_array[~np.isnan(row_array)].tolist()
@@ -308,6 +324,7 @@ class DIARunDB(Database):
         )
 
         # Create Indices
+        LOGGER.info("Creating database indices...")
         self.cur.execute(
             """
             CREATE INDEX frag_intensity_idx ON fragment_ions(intensity);
@@ -316,13 +333,37 @@ class DIARunDB(Database):
 
         self.cur.execute(
             """
-            CREATE INDEX frag_mz_idx ON fragment_ions(mz);
+            CREATE INDEX frag_ion_mz_idx ON fragment_ions(mz);
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX frag_ion_spec_idx ON fragment_ions(spectrum_idx)
             """
         )
 
         self.cur.execute(
             """
             CREATE INDEX frag_spec_idx ON fragments(spectrum_idx)
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX rt_idx ON fragments(scan_start_time)
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX win_lower_idx ON fragments(isolation_window_lower)
+            """
+        )
+
+        self.cur.execute(
+            """
+            CREATE INDEX win_upper_idx ON fragments(isolation_window_upper)
             """
         )
         self.con.commit()
