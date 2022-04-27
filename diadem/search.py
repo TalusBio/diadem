@@ -13,6 +13,9 @@ from .feature import Feature
 from .peptides import PeptideDB
 from .msdata import DIARunDB
 
+from collections import defaultdict
+from time import time
+
 
 @dataclass
 class PeptideScore:
@@ -137,7 +140,7 @@ class WindowScorer:
         self._min_corr = min_corr
         self._rng = np.random.default_rng(rng)
 
-        self._score_function = score_functions.hyperscore
+        self._score_function = score_functions.mini_hyperscore
         self._pbar = None
         self._unmatched_peaks = 0
 
@@ -225,7 +228,10 @@ class WindowScorer:
             The best score precursor for the feature.
         """
         with self._peptides:
-            precursors = self._lookup_precursors(query_feature.mean_mz)
+            precursors, fragments = self._lookup_precursors(
+                query_feature.mean_mz
+            )
+            print(len(precursors))
 
         rt_bounds = (
             query_feature.ret_times.min(),
@@ -238,26 +244,32 @@ class WindowScorer:
             .reset_index()
         )
         peaks = self._peaks.merge(scans, how="right")
-
+        ret_times = self._scans.loc[within_rt, "scan_start_time"]
         best_peptide = None
         best_score = -np.inf
         features = []
-        for prec, frags in tqdm(zip(*precursors)):
+        times = defaultdict(list)
+        for prec, frags in tqdm(
+            zip(precursors, fragments), total=len(precursors)
+        ):
             prec_features = [query_feature]
             frag_areas = [query_feature.area]
             for frag in frags:
+                t1 = time()
                 feat = self._find_feature(
                     feature_mz=frag,
                     peaks=peaks,
-                    ret_times=scans["scan_start_time"].values,
+                    ret_times=ret_times.values,
                     peak_bounds=(
                         query_feature.lower_bound,
                         query_feature.upper_bound,
                     ),
                 )
-
                 if feat is None:
                     continue
+
+                t2 = time()
+                times["feat"].append(t2 - t1)
 
                 features.append(feat)
                 corr = pearson_corr(query_feature.peak, feat.peak)
@@ -266,6 +278,10 @@ class WindowScorer:
                 else:
                     frag_areas.append(0.0)
 
+                t3 = time()
+                times["corr"].append(t3 - t2)
+
+            t4 = time()
             score_val = self._score_function(np.array(frag_areas))
             if score_val < best_score:
                 continue
@@ -281,6 +297,11 @@ class WindowScorer:
                 score=score_val,
                 target=prec[1],
             )
+            t5 = time()
+            times["score"].append(t5 - t4)
+
+        for key, val in times.items():
+            print(key, sum(val))
 
         elim_mz = itertools.chain.from_iterable(
             [f.row_ids for f in best_peptide.features]
@@ -414,7 +435,6 @@ class WindowScorer:
             ret_times=ret_times,
         )
         feature.update_bounds()
-        print(feature.area)
         return feature
 
 
@@ -435,7 +455,45 @@ def pearson_corr(x_array, y_array):
     """
     x_diffs = x_array - x_array.mean()
     y_diffs = y_array - y_array.mean()
-    coeff = np.sum(x_diffs * y_diffs) / np.sqrt(
-        np.sum(x_diffs**2) * np.sum(y_diffs**2)
-    )
-    return coeff
+    num = np.sum(x_diffs * y_diffs)
+    denom = np.sqrt(np.sum(x_diffs**2) * np.sum(y_diffs**2))
+    if denom == 0:
+        return 0
+
+    return num / denom
+
+
+@nb.njit
+def find_matching_peaks(
+    peaks: np.ndarray,
+    scans: np.ndarray,
+    target_mz: np.ndarray,
+    tol: float,
+):
+    """Find peaks that match the target m/z(s)
+
+    Parameters
+    ----------
+    peaks : numpy.ndarray of shape (n_peaks, 3)
+        The peaks to choose from. Each row is a peak with columns corresponding
+        to m/z, intensity, and scan index.
+    scans : numpy.ndarray of shape (n_scans,)
+        The scans that correspond to the peak.
+    target_mz : np.ndarray
+        The target m/z values.
+    tol : float
+        The matching tolerance in ppm.
+
+    Returns
+    -------
+    list of numpy.ndarray
+    """
+    tol = np.floor((tol * target_mz) / 1e6)
+    mz_lim = (target_mz - tol, target_mz + tol)
+    peaks = peaks[np.isin(peaks[:, 2], scans), :]
+    matches = []
+    for lower, upper in zip(*mz_lim):
+        is_match = peaks[:, 0] > lower & peaks[:, 0] < upper
+        match = peaks[is_match, :]
+
+    return

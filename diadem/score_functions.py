@@ -38,4 +38,4 @@ def hyperscore(intensities):
         The score.
     """
     n_peaks = (intensities > 0).sum()
-    return np.log(np.factorial(n_peaks / 2) ** 2 * intensities.sum() / 2)
+    return np.log(np.math.factorial(n_peaks / 2) ** 2 * intensities.sum() / 2)

@@ -61,9 +61,8 @@ class Feature:
         if self._background is None:
             mask = np.zeros_like(self.intensities)
             mask[self.lower_bound : self.upper_bound] = 1
-            print(mask)
-            background = np.ma.array(self.intensities, mask.tolist())
-            self._background = np.median(background)
+            background = np.ma.array(self.intensities, mask=mask.astype(bool))
+            self._background = np.ma.median(background)
 
         return self._background
 
