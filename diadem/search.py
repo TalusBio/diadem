@@ -1,20 +1,15 @@
 """A class to score peptides"""
-import itertools
-from typing import List, Union, Optional, Tuple
+from typing import List, Union
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import numba as nb
 from tqdm.auto import tqdm
 
-from . import score_functions, utils
-from .feature import Feature
+from . import scoring
+from .feature import Feature, extract_feature
 from .peptides import PeptideDB
 from .msdata import DIARunDB
-
-from collections import defaultdict
-from time import time
 
 
 @dataclass
@@ -140,7 +135,6 @@ class WindowScorer:
         self._min_corr = min_corr
         self._rng = np.random.default_rng(rng)
 
-        self._score_function = score_functions.mini_hyperscore
         self._pbar = None
         self._unmatched_peaks = 0
 
@@ -148,7 +142,7 @@ class WindowScorer:
             self._n_peaks = self._run.n_peaks
             self._peaks = pd.read_sql(
                 """
-                SELECT fi.ROWID, fi.* FROM fragment_ions AS fi
+                SELECT fi.* FROM fragment_ions AS fi
                 JOIN fragments AS fr
                     ON fi.spectrum_idx=fr.spectrum_idx
                 WHERE fr.isolation_window_lower >= ?
@@ -167,23 +161,55 @@ class WindowScorer:
                 params=self._window,
             )
 
-        self._peaks = self._peaks.sort_values(
-            "intensity", ascending=False
-        ).reset_index(drop=True)
-
-        self._scans = self._scans.sort_values("scan_start_time").reset_index(
-            drop=True
+        # Sort by intensity within each spectrum:
+        self._peaks = (
+            self._peaks.merge(self._scans, how="left")
+            .sort_values(
+                ["scan_start_time", "intensity"],
+                ascending=[True, False],
+            )
+            .reset_index(drop=True)
         )
+
+        # Indices of all peaks ordered by abundance:
+        self._order = list(np.argsort(-self._peaks["intensity"].values))
 
     def __iter__(self):
         """Iterate through the features in a run"""
-        with self._run:
-            self._run.reset()
-            while not self._peaks.empty:
-                feature = self._next_peak()
-                yield feature
+        return self
 
-            self._run.reset()
+    def __next__(self):
+        """Return the next most intense feature.
+
+        Returns
+        -------
+        mean_mz : int
+            The mean integerized m/z of the feature.
+        peak_area : float
+            The baseline-subtracted peak area of the feature.
+        bounds : tuple of int
+            The peak boundaries
+        idx_bounds : tuple of int
+            The spectrum bounds.
+
+
+        """
+        if self._peaks.empty:
+            raise StopIteration
+
+        peak = self._peaks.loc[self._order[:1], :]
+        query = (int(peak["mz"]), float(peak["scan_start_time"]))
+        feat_info, _ = extract_feature(
+            *query,
+            mz_array=self._peaks["mz"].to_numpy(),
+            int_array=self._peaks["intensity"].to_numpy(),
+            rt_array=self._peaks["scan_start_time"].to_numpy(),
+            mz_tol=self._tol,
+            rt_tol=self._width,
+        )
+        feature = Feature(*query, *feat_info)
+        feature.update_bounds()
+        return feature
 
     def search(self):
         """Perform the database search
@@ -227,62 +253,45 @@ class WindowScorer:
         PeptideScore
             The best score precursor for the feature.
         """
-        with self._peptides:
-            precursors, fragments = self._lookup_precursors(
-                query_feature.mean_mz
-            )
-            print(len(precursors))
+        query_mz = int(query_feature.mean_mz)
+        rt_bounds = query_feature.ret_time_bounds
 
-        rt_bounds = (
-            query_feature.ret_times.min(),
-            query_feature.ret_times.max(),
-        )
-        within_rt = self._scans["scan_start_time"].between(*rt_bounds)
-        scans = (
-            self._scans.loc[within_rt, "spectrum_idx"]
-            .reset_index(drop=True)
-            .reset_index()
-        )
-        peaks = self._peaks.merge(scans, how="right")
-        ret_times = self._scans.loc[within_rt, "scan_start_time"]
+        # Get candidates:
+        with self._peptides:
+            precursors, fragments = self._lookup_precursors(query_mz)
+
+        # Get a smaller list of peaks:
+        within_rt = self._peaks["scan_start_time"].between(*rt_bounds)
+        peaks = self._peaks.loc[within_rt]
+        offset = peaks.index.min()
+        print(peaks.index)
+        mz_array = peaks["mz"].to_numpy()
+        int_array = peaks["intensity"].to_numpy()
+        rt_array = peaks["scan_start_time"].to_numpy()
+
+        eliminated = set()
+
+        # Find the best scoring peptide:
         best_peptide = None
+        best_rows = []
         best_score = -np.inf
         features = []
-        times = defaultdict(list)
-        for prec, frags in tqdm(
-            zip(precursors, fragments), total=len(precursors)
-        ):
-            prec_features = [query_feature]
-            frag_areas = [query_feature.area]
-            for frag in frags:
-                t1 = time()
-                feat = self._find_feature(
-                    feature_mz=frag,
-                    peaks=peaks,
-                    ret_times=ret_times.values,
-                    peak_bounds=(
-                        query_feature.lower_bound,
-                        query_feature.upper_bound,
-                    ),
-                )
-                if feat is None:
-                    continue
-
-                t2 = time()
-                times["feat"].append(t2 - t1)
-
-                features.append(feat)
-                corr = pearson_corr(query_feature.peak, feat.peak)
-                if corr > self._min_corr:
-                    frag_areas.append(feat.area)
-                else:
-                    frag_areas.append(0.0)
-
-                t3 = time()
-                times["corr"].append(t3 - t2)
-
-            t4 = time()
-            score_val = self._score_function(np.array(frag_areas))
+        for prec, frags in zip(precursors, fragments):
+            print(frags)
+            score_val, feat_info, rows = scoring.score_precursor(
+                query_mz=query_mz,
+                query_rt=query_feature.query_rt,
+                query_peak=query_feature.peak,
+                lower_bound=query_feature.lower_bound,
+                upper_bound=query_feature.upper_bound,
+                frag_array=np.array(frags),
+                mz_array=mz_array,
+                int_array=int_array,
+                rt_array=rt_array,
+                mz_tol=self._tol,
+                rt_tol=self._width,
+                min_corr=self._min_corr,
+            )
             if score_val < best_score:
                 continue
 
@@ -291,23 +300,22 @@ class WindowScorer:
                 if self._rng.integers(1, endpoint=True):
                     continue
 
+            features = [Feature(*f) for f in feat_info]
+            best_rows = rows + offset
             best_peptide = PeptideScore(
                 index=prec[0],
-                features=prec_features,
+                features=features,
                 score=score_val,
                 target=prec[1],
             )
-            t5 = time()
-            times["score"].append(t5 - t4)
 
-        for key, val in times.items():
-            print(key, sum(val))
+        print(best_rows)
+        print([f.query_mz for f in features])
 
-        elim_mz = itertools.chain.from_iterable(
-            [f.row_ids for f in best_peptide.features]
-        )
-        self._peaks = self._peaks[~self._peaks["rowid"].isin(elim_mz)]
-        self._pbar.update(len(elim_mz))
+        self._peaks = self._peaks.drop(best_rows)
+        best_rows = set(best_rows)
+        self._order = [i for i in self._order if i not in best_rows]
+        self._pbar.update(len(best_rows))
         return best_peptide
 
     def _lookup_precursors(self, fragment_mz):
@@ -343,157 +351,3 @@ class WindowScorer:
         )
 
         return precursors, fragments
-
-    def _find_feature(
-        self,
-        feature_mz: int,
-        peaks: pd.DataFrame,
-        ret_times: np.ndarray,
-        peak_bounds: Optional[Tuple[float, float]] = None,
-    ):
-        """Extract a feature from candidate peaks.
-
-        Parameters
-        ----------
-        feature_mz : int
-            The integerized m/z of a feature.
-        peaks : pandas.DataFrame
-            The peaks from suitable mass spectra.
-        ret_times : numpy.ndarray
-            The rentention times associated wit this peak.
-        peak_bounds : Tuple, optional
-            The minimum and maximum retention times for peak integration.
-
-        Returns
-        -------
-        Feature
-            The found feature.
-        """
-        tol = int(self._tol * feature_mz / 1e6)
-        mz_lim = (feature_mz - tol, feature_mz + tol)
-        mz_array = np.array([np.nan] * len(ret_times))
-        int_array = np.zeros_like(ret_times)
-        frag_peaks = peaks.loc[peaks["mz"].between(*mz_lim), :]
-        if frag_peaks.empty:
-            return None
-
-        frag_peaks = frag_peaks.loc[
-            utils.groupby_max(frag_peaks, "spectrum_idx", "intensity"), :
-        ]
-
-        if "index" not in frag_peaks.columns:
-            within_rt = self._scans["scan_start_time"].between(
-                ret_times.min(), ret_times.max()
-            )
-            scans = (
-                self._scans.loc[within_rt, "spectrum_idx"]
-                .reset_index(drop=True)
-                .reset_index()
-            )
-            frag_peaks = frag_peaks.merge(scans, how="right")
-
-        mz_array[frag_peaks["index"]] = frag_peaks["mz"]
-        int_array[frag_peaks["index"]] = frag_peaks["intensity"]
-        feat = Feature(
-            query_mz=feature_mz,
-            mean_mz=int(np.nanmean(mz_array)),
-            row_ids=frag_peaks["rowid"].to_list(),
-            ret_times=ret_times.copy(),
-            intensities=np.nan_to_num(int_array),
-        )
-        if peak_bounds is not None:
-            feat.lower_bound, feat.upper_bound = peak_bounds
-
-        return feat
-
-    def _next_peak(self):
-        """Return the next most intense feature.
-
-        Returns
-        -------
-        mean_mz : int
-            The mean integerized m/z of the feature.
-        peak_area : float
-            The baseline-subtracted peak area of the feature.
-        bounds : tuple of int
-            The peak boundaries
-        idx_bounds : tuple of int
-            The spectrum bounds.
-
-
-        """
-        top_feat = (
-            self._peaks.iloc[[0], :].merge(self._scans, how="left").iloc[0, :]
-        )
-        min_rt = top_feat["scan_start_time"] - self._width
-        max_rt = top_feat["scan_start_time"] + self._width
-        within_rt = self._scans["scan_start_time"].between(min_rt, max_rt)
-        ret_times = self._scans.loc[within_rt, "scan_start_time"].values
-        feature = self._find_feature(
-            feature_mz=int(top_feat["mz"]),
-            peaks=self._peaks,
-            ret_times=ret_times,
-        )
-        feature.update_bounds()
-        return feature
-
-
-@nb.njit
-def pearson_corr(x_array, y_array):
-    """Calcualte the Pearson correlation between two arrays.
-
-    Parameters
-    ----------
-    x_array : numpy.ndarray
-    y_array : numpy.ndarray
-        The arrays to calculate the correlation between.
-
-    Returns
-    -------
-    float
-        The Pearson correlation coefficient.
-    """
-    x_diffs = x_array - x_array.mean()
-    y_diffs = y_array - y_array.mean()
-    num = np.sum(x_diffs * y_diffs)
-    denom = np.sqrt(np.sum(x_diffs**2) * np.sum(y_diffs**2))
-    if denom == 0:
-        return 0
-
-    return num / denom
-
-
-@nb.njit
-def find_matching_peaks(
-    peaks: np.ndarray,
-    scans: np.ndarray,
-    target_mz: np.ndarray,
-    tol: float,
-):
-    """Find peaks that match the target m/z(s)
-
-    Parameters
-    ----------
-    peaks : numpy.ndarray of shape (n_peaks, 3)
-        The peaks to choose from. Each row is a peak with columns corresponding
-        to m/z, intensity, and scan index.
-    scans : numpy.ndarray of shape (n_scans,)
-        The scans that correspond to the peak.
-    target_mz : np.ndarray
-        The target m/z values.
-    tol : float
-        The matching tolerance in ppm.
-
-    Returns
-    -------
-    list of numpy.ndarray
-    """
-    tol = np.floor((tol * target_mz) / 1e6)
-    mz_lim = (target_mz - tol, target_mz + tol)
-    peaks = peaks[np.isin(peaks[:, 2], scans), :]
-    matches = []
-    for lower, upper in zip(*mz_lim):
-        is_match = peaks[:, 0] > lower & peaks[:, 0] < upper
-        match = peaks[is_match, :]
-
-    return

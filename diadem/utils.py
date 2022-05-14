@@ -1,4 +1,6 @@
 """Utility Functions"""
+import numba as nb
+import numpy as np
 
 
 def groupby_max(df, by_cols, max_col):
@@ -97,3 +99,30 @@ def int2mz(mzint, precision=5):
         The m/z value.
     """
     return mzint / 10**precision
+
+
+@nb.njit
+def unique(srt_array: np.ndarray) -> np.ndarray:
+    """Get the unique values of a sorted numpy array.
+
+    Parameters
+    ----------
+    srt_array : numpy.ndarray
+        A sorted 1D numpy array.
+
+    Returns
+    -------
+    numpy.ndarray
+    """
+    vals = []
+    for val in srt_array:
+        if not vals:
+            vals.append(val)
+            continue
+
+        if val == vals[-1]:
+            continue
+
+        vals.append(val)
+
+    return np.array(vals)
