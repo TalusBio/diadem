@@ -1,4 +1,5 @@
 """A class to score peptides"""
+import time
 from typing import List, Union
 from dataclasses import dataclass
 
@@ -264,7 +265,6 @@ class WindowScorer:
         within_rt = self._peaks["scan_start_time"].between(*rt_bounds)
         peaks = self._peaks.loc[within_rt]
         offset = peaks.index.min()
-        print(peaks.index)
         mz_array = peaks["mz"].to_numpy()
         int_array = peaks["intensity"].to_numpy()
         rt_array = peaks["scan_start_time"].to_numpy()
@@ -277,7 +277,6 @@ class WindowScorer:
         best_score = -np.inf
         features = []
         for prec, frags in zip(precursors, fragments):
-            print(frags)
             score_val, feat_info, rows = scoring.score_precursor(
                 query_mz=query_mz,
                 query_rt=query_feature.query_rt,
@@ -309,9 +308,6 @@ class WindowScorer:
                 target=prec[1],
             )
 
-        print(best_rows)
-        print([f.query_mz for f in features])
-
         self._peaks = self._peaks.drop(best_rows)
         best_rows = set(best_rows)
         self._order = [i for i in self._order if i not in best_rows]
@@ -338,16 +334,21 @@ class WindowScorer:
         else:
             prec_mz = self._window
 
+        t1 = time.time()
         precursors = self._peptides.fragment_to_precursors(
             fragment_mz,
             self._tol,
             prec_mz,
         )
+        t2 = time.time()
 
         prec_idx = [p[0] for p in precursors]
+        t3 = time.time()
         fragments = self._peptides.precursors_to_fragments(
             prec_idx,
             to_int=True,
         )
+        t4 = time.time()
+        print(t2 - t1, t4 - t3)
 
         return precursors, fragments

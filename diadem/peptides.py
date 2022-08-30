@@ -105,6 +105,7 @@ class PeptideDB(Database):
         self._rng = np.random.default_rng(rng)
         self._decoy_prefix = decoy_prefix
         self._mod_cols = None
+        self.stuff = defaultdict(list)
 
         # Set static modifications
         self._static_mods = dict(self._static_mods)
@@ -215,6 +216,8 @@ class PeptideDB(Database):
                 """,
                 (min_mz, max_mz),
             )
+            # for x in ret.fetchall():
+            #    print(x)
             return ret.fetchall()
 
         # For closed searching:
@@ -322,7 +325,7 @@ class PeptideDB(Database):
         self.cur.execute(
             """
             CREATE TABLE fragments (
-                mz INT,
+                mz_idx INT REFERENCES masses(ROWID),
                 precursor_idx INT REFERENCES precursors(ROWID)
             );
             """
@@ -399,6 +402,9 @@ class PeptideDB(Database):
                             (utils.mz2int(f), prec_idx)
                             for f in self._pepcalc.fragments(modseq, charge)
                         ]
+                        for mz in self._pepcalc.fragments(modseq, charge):
+                            mz = utils.mz2int(mz)
+                            self.stuff[mz].append(prec_idx)
 
             commit_counter += 1
             if commit_counter >= 10000:
