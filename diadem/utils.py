@@ -65,42 +65,6 @@ def bytes2bools(byte_obj):
     return [b == "1" for b in bitstring[2:]]
 
 
-def mz2int(moverz, precision=5):
-    """Convert an m/z to an int
-
-    Parameters
-    ----------
-    moverz : float
-        The m/z value to convert.
-    precision : int
-        How many decimal places to retain.
-
-    Returns
-    -------
-    int
-        The intergerized m/z value.
-    """
-    return int(moverz * 10**precision)
-
-
-def int2mz(mzint, precision=5):
-    """Convert an integer to the m/z.
-
-    Parameters
-    ----------
-    mzint : int
-        The integerized m/z value.
-    precision : int
-        How many decimal places were retained.
-
-    Returns
-    -------
-    float
-        The m/z value.
-    """
-    return mzint / 10**precision
-
-
 @nb.njit
 def unique(srt_array: np.ndarray) -> np.ndarray:
     """Get the unique values of a sorted numpy array.
