@@ -4,418 +4,338 @@ from typing import List
 from pathlib import Path
 from dataclasses import dataclass
 
+import numba as nb
 import numpy as np
+import awkward as ak
 from tqdm.auto import tqdm
 from pyteomics.mzml import MzML
 
 from . import utils
 from .feature import Feature
-from .database import Database
 
 LOGGER = logging.getLogger(__name__)
 
 
-class DIARunDB(Database):
-    """An SQLite3 database of DIA mass spectrometry data.
-
-    Create an SQLite3 database containing the raw mass spectrometry data
-    from an data-independent acquisition (DIA) experiment. These files
-    contain a subset of the information normally found in an mzML file and
-    are designed to quickly query peaks and their associated spectra.
+class DiaRun:
+    """A the mass spectra from a DIA mass spectrometry run.
 
     Parameters
     ----------
     ms_data_file : str or Path
-        The mass spectrometry data file to parse. Currently only mzML files
+        The mass spectrometry data file to parse. Currently, only mzML files
         are supported.
-    db_file : str or Path, optional
-        The database file to write. By default this is `ms_data_file` suffixed
-        with ".db".
-    force_ : bool, optional
-        Overwrite the database file if it already exists.
     """
 
-    def __init__(self, ms_data_file, db_file=None, force_=False):
-        """Initialize a DIARunDB"""
+    def __init__(self, ms_data_file):
         self._ms_data_file = Path(ms_data_file)
+        self.precursors = None
+        self.windows = None
 
-        if db_file is None:
-            db_file = self._ms_data_file.name + ".db"
-
-        super().__init__(db_file, force_)
-        if not self._built:
-            with self:
-                self._build_db()
-
-    @property
-    def windows(self):
-        """Retrieve the isolation windows used in the DIA experimetn."""
-        query = self.cur.execute(
-            """
-            SELECT DISTINCT isolation_window_lower, isolation_window_upper
-                FROM fragments
-            ORDER BY isolation_window_lower
-            """
-        )
-        return query.fetchall()
-
-    @property
-    def n_peaks(self):
-        """The number of fragment ion peaks"""
-        query = self.cur.execute("SELECT COUNT(*) FROM fragment_ions")
-        return query.fetchone()[0]
-
-    def _create_tables(self):
-        """Create the database tables."""
-        self.cur.execute(
-            """
-            CREATE TABLE precursors (
-                spectrum_idx INT PRIMARY KEY,
-                scan_start_time FLOAT,
-                total_ion_current FLOAT
-            );
-            """
-        )
-
-        self.cur.execute(
-            """
-            CREATE TABLE fragments (
-                spectrum_idx INT PRIMARY KEY,
-                scan_start_time FLOAT,
-                total_ion_current FLOAT,
-                isolation_window_upper FLOAT,
-                isolation_window_center FLOAT,
-                isolation_window_lower FLOAT
-            );
-            """
-        )
-
-        self.cur.execute(
-            """
-            CREATE TABLE precursor_ions (
-                mz INT,
-                intensity REAL,
-                spectrum_idx INT REFERENCES precursors(spectrum_idx)
-            )
-            """
-        )
-
-        self.cur.execute(
-            """
-            CREATE TABLE fragment_ions (
-                mz INT,
-                intensity REAL,
-                spectrum_idx INT REFERENCES fragments(spectrum_idx)
-            )
-            """
-        )
-
-        self.cur.execute(
-            """
-            CREATE TABLE used_ions (
-                fragment_idx INT REFERENCES fragment_ions(ROWID)
-            );
-            """
-        )
-
-    def find_features(self, mz_values, window, ret_time=None, tol=10):
-        """Find features in the DIA data.
-
-        Parameters
-        ----------
-        mz_values : list of float
-            The m/z values to find.
-        window : tuple of int
-            The precursor isolation window bounds. `None` will instead
-            look for the precursor signals.
-        ret_time : tuple of float
-            The retention time window to look in. `None` will search the
-            entire run.
-        tol : float
-            The matching tolerance in ppm.
+    def parse(self):
+        """Parse the mzML file.
 
         Returns
         -------
-        list of Features
-            The extracted features.
+        self
         """
-        if ret_time is None:
-            ret_time = (0.0, 1e6)
+        self.precursors = DiaWindow()
+        self.windows = {}
 
-        mz_values = utils.listify(mz_values)
-        indices, ret_times = self._rt2scans(*ret_time, window)
-
-        features = []
-        for mz_val in tqdm(mz_values):
-            if not isinstance(mz_val, int):
-                mz_val = utils.mz2int(mz_val)
-
-            tol_val = int(tol * mz_val / 1e6)
-
-            if len(mz_values) > 10000000000:
-                q = "EXPLAIN QUERY PLAN"
-            else:
-                q = ""
-
-            query = self.cur.execute(
-                f"""
-                {q}
-                SELECT fi.ROWID, fi.mz, fi.intensity, fr.spectrum_idx
-                    FROM (
-                        SELECT tmp.ROWID, tmp.mz, MAX(tmp.intensity) AS intensity, tmp.spectrum_idx
-                            FROM fragment_ions AS tmp
-                        WHERE tmp.mz BETWEEN ? AND ?
-                        GROUP BY tmp.spectrum_idx
-                    ) AS fi
-                JOIN fragments AS fr
-                    ON fi.spectrum_idx=fr.spectrum_idx
-                WHERE fr.scan_start_time BETWEEN ? AND ?
-                    AND fr.isolation_window_lower >= ?
-                    AND fr.isolation_window_upper <= ?
-                """,
-                (mz_val - tol_val, mz_val + tol_val, *ret_time, *window),
-            )
-
-            if len(mz_values) > 10000:
-                features.append(None)
-                continue
-
-            mz_array = np.array([np.nan] * len(ret_times))
-            row_array = np.array([np.nan] * len(ret_times))
-            int_array = np.zeros_like(ret_times)
-            for row_id, feat_mz_val, int_val, spec_idx in query:
-                idx = indices.index(spec_idx)
-                mz_array[idx] = feat_mz_val
-                row_array[idx] = row_id
-                int_array[idx] = int_val
-
-            if not (~np.isnan(mz_array)).sum():
-                features.append(None)
-                continue
-
-            mz_array = np.array(mz_array)
-            row_array = row_array[~np.isnan(row_array)].tolist()
-            feat = Feature(
-                query_mz=mz_val,
-                mean_mz=int(np.nanmean(mz_array)),
-                row_ids=row_array,
-                ret_times=ret_times.copy(),
-                intensities=int_array,
-            )
-
-            features.append(feat)
-
-        return features
-
-    def reset(self):
-        """Reset the used_ions table."""
-        self.cur.execute("""DELETE FROM used_ions;""")
-        self.con.commit()
-
-    def remove_ions(self, frag_row):
-        """Add multiple fragment ions to the used_ion table.
-
-        Parameters
-        ----------
-        fragment_mzs : list of int
-            The integerized m/z
-
-        """
-        self.cur.executemany(
-            "INSERT INTO used_ions VALUES (?);",
-            [(f,) for f in utils.listify(frag_row)],
-        )
-        self.con.commit()
-
-    def _rt2scans(self, min_rt, max_rt, window=None):
-        """Get the scans for a DIA window at a specific retention time.
-
-        Parameters
-        ----------
-        min_rt : float
-            The lower bound of the retention time window.
-        max_rt : float
-            The upper bound of the retention time window.
-        window : tuple of float
-            The upper and lower bound of the DIA window. `None` will specify
-            precursors.
-
-        Returns
-        -------
-        indices : list of int
-            The scan indices for the scan of interest.
-        ret_times : np.array
-            The retention times
-        """
-        if window is None:
-            table = "precursors"
-        else:
-            table = "fragments"
-
-        indices = self.cur.execute(
-            f"""
-            SELECT DISTINCT spectrum_idx, scan_start_time FROM {table}
-            WHERE isolation_window_lower >= ?
-                AND isolation_window_upper <= ?
-                AND scan_start_time BETWEEN ? AND ?
-            ORDER BY spectrum_idx
-            """,
-            (*window, min_rt, max_rt),
-        )
-
-        indices, ret_times = list(zip(*indices.fetchall()))
-        return indices, np.array(ret_times)
-
-    def _build_db(self):
-        """Build the database."""
-        precursors_rows = []
-        fragments_rows = []
-        precursor_ions_rows = []
-        fragment_ions_rows = []
-        insert_counter = 0
+        LOGGER.info("Reading '%s'...", self._ms_data_file)
         with MzML(str(self._ms_data_file)) as mzdata:
-            desc = f"Converting {self._ms_data_file}"
-            for spectrum in tqdm(mzdata, desc=desc, unit="spectra"):
-                insert_counter += 1
-                idx = spectrum["index"]
-                start = spectrum["scanList"]["scan"][0]["scan start time"]
-                tic = spectrum["total ion current"]
-                is_fragment = spectrum["ms level"] != 1
-                spec_arrays = (
-                    spectrum["m/z array"].tolist(),
-                    spectrum["intensity array"].tolist(),
-                )
-                ions = [
-                    (utils.mz2int(m), i, idx) for m, i in zip(*spec_arrays)
+            for spectrum in tqdm(mzdata, unit="spectra"):
+                ret_time = spectrum["scanList"]["scan"][0]["scan start time"]
+                mz_array = spectrum["m/z array"]
+                int_array = spectrum["intensity array"]
+                if spectrum["ms level"] == 1:
+                    self.precursors.add_spectrum(mz_array, int_array, ret_time)
+                    continue
+
+                window = spectrum["precursorList"]["precursor"][0][
+                    "isolationWindow"
                 ]
-                if is_fragment:
-                    precursor = spectrum["precursorList"]["precursor"][0]
-                    window = precursor["isolationWindow"]
-                    center = window["isolation window target m/z"]
-                    lower = center - window["isolation window lower offset"]
-                    upper = center + window["isolation window upper offset"]
-                    fragment_ions_rows += ions
-                    fragments_rows.append(
-                        (idx, start, tic, upper, center, lower)
-                    )
+                center = window["isolation window target m/z"]
+                isolation_window = (
+                    center - window["isolation window lower offset"],
+                    center + window["isolation window upper offset"],
+                )
 
-                else:
-                    precursor_ions_rows += ions
-                    precursors_rows.append((idx, start, tic))
+                try:
+                    parsed = self.windows[isolation_window]
+                except KeyError:
+                    parsed = DiaWindow(isolation_window)
+                    self.windows[isolation_window] = parsed
 
-                if insert_counter >= 10000:
-                    self._update_db(
-                        precursors_rows,
-                        fragments_rows,
-                        precursor_ions_rows,
-                        fragment_ions_rows,
-                    )
-                    insert_counter = 0
-                    precursors_rows = []
-                    fragments_rows = []
-                    precursor_ions_rows = []
-                    fragment_ions_rows = []
+                parsed.add_spectrum(mz_array, int_array, ret_time)
 
-        self._update_db(
-            precursors_rows,
-            fragments_rows,
-            precursor_ions_rows,
-            fragment_ions_rows,
+        return self
+
+
+class DiaWindow:
+    """Data from a single DIA isolation window.
+
+    Parameters
+    ----------
+    isolation_window : tuple of (float, float) or None, optional
+        The precurosr isolation window. ``None`` indicates precursor (MS1)
+        scans.
+    """
+
+    def __init__(self, isolation_window=None, precision=5):
+        """Initialize the DiaWindow"""
+        self.isolation_window = isolation_window
+        self.precision = 5
+        self.mz_arrays = ak.ArrayBuilder()
+        self.intensity_arrays = ak.ArrayBuilder()
+        self.ret_times = ak.ArrayBuilder()
+
+        # Only create after adding all of the spectra:
+        self.order = None
+        self.offsets = None
+
+        # Only used when searching:
+        self.consumed = None
+        self.mask = None
+        self.position = None
+
+    def __getitem__(self, idx):
+        """Retrieve spectra"""
+        return (
+            self.mz_arrays[idx],
+            self.intensity_arrays[idx],
+            self.ret_times[idx],
         )
 
-        # Create Indices
-        LOGGER.info("Creating database indices...")
-        self.cur.execute(
-            """
-            CREATE INDEX frag_intensity_idx ON fragment_ions(intensity);
-            """
+    def __enter__(self):
+        """Enter for searching."""
+        # Sort peaks by intensity.
+        self.order = np.argsort(-ak.flatten(self.intensity_arrays.snapshot()))
+        self.offsets = np.array(self.mz_arrays.snapshot().layout.starts)
+        self.consumed = np.zeros(len(self.order), dtype=bool)
+        self.mask = ak.unflatten(
+            ak.Array(self.consumed),
+            ak.num(self.mz_arrays.snapshot()),
         )
+        self.position = 0
+        return self
 
-        self.cur.execute(
-            """
-            CREATE INDEX frag_ion_mz_idx ON fragment_ions(mz);
-            """
-        )
+    def __exit__(self, *args):
+        """Reset after searching."""
+        self.consumed = None
+        self.order = None
+        self.mask = None
+        self.offsets = None
+        self.position = 0
 
-        self.cur.execute(
-            """
-            CREATE INDEX frag_ion_spec_idx ON fragment_ions(spectrum_idx)
-            """
-        )
+    def __iter__(self):
+        """Iterate through remaining peaks."""
+        while True:
+            try:
+                yield next(self)
+            except StopIteration:
+                break
 
-        self.cur.execute(
-            """
-            CREATE INDEX frag_spec_idx ON fragments(spectrum_idx)
-            """
-        )
+    def __next__(self):
+        """Get the next viable peak."""
+        try:
+            peak = self.order[self.position]
+            self.position += 1
+            if self.consumed[peak]:
+                return next(self)
 
-        self.cur.execute(
-            """
-            CREATE INDEX rt_idx ON fragments(scan_start_time)
-            """
-        )
+            return peak
+        except ValueError:
+            raise StopIteration
 
-        self.cur.execute(
-            """
-            CREATE INDEX win_lower_idx ON fragments(isolation_window_lower)
-            """
-        )
+    def __len__(self):
+        """Get the number of peaks"""
+        return len(self.order)
 
-        self.cur.execute(
-            """
-            CREATE INDEX win_upper_idx ON fragments(isolation_window_upper)
-            """
-        )
-        self.con.commit()
-
-    def _update_db(
-        self,
-        precursors_rows,
-        fragments_rows,
-        precursor_ions_rows,
-        fragment_ions_rows,
-    ):
-        """Update the database.
+    def peak(self, idx):
+        """Return information about a peak.
 
         Parameters
         ----------
-        precursors_rows : list of tuples
-            The rows to insert into the precursors table.
-        fragments_rows : list of tuples
-            The rows to insert into the fragments table.
-        precursor_ions_rows : list of tuples
-            The rows to insert into the precursor_ions table.
-        fragment_ions_rows : list of tuples
-            The rows to insert into the fragment_ions table.
+        idx : int
+            The 1D index of a peak.
+
+        Returns
+        -------
+        tuple of float
+            The m/z, intensity, and retention time of the peak.
         """
-        self.cur.executemany(
-            """
-            INSERT OR IGNORE INTO precursors
-            VALUES (?, ?, ?);
-            """,
-            precursors_rows,
+        loc = _idx2loc(idx, self.offsets)
+        return (
+            self.mz_arrays[loc],
+            self.intensity_arrays[loc],
+            self.ret_times[loc[0]],
         )
 
-        self.cur.executemany(
-            """
-            INSERT OR IGNORE INTO fragments
-            VALUES (?, ?, ?, ?, ?, ?);
-            """,
-            fragments_rows,
-        )
+    def consume(self, peaks):
+        """Consume a peak.
 
-        self.cur.executemany(
-            """
-            INSERT OR IGNORE INTO precursor_ions
-            VALUES (?, ?, ?)
-            """,
-            precursor_ions_rows,
-        )
+        Parameters
+        ----------
+        peaks : int or Slice
+            The index of the peak to consume.
+        """
+        self.consumed[peaks] = True
 
-        self.cur.executemany(
-            """
-            INSERT OR IGNORE INTO fragment_ions
-            VALUES (?, ?, ?)
-            """,
-            fragment_ions_rows,
+    def xic(self, moverz, rt_min=None, rt_max=None, tol=10):
+        """Create an extracted ion chromatogram.
+
+        Parameters
+        ----------
+        moverz : int
+            The integerized m/z to extract.
+        rt_min : float, optional
+            The lower retention time bound.
+        rt_max : float, optional
+            The upper retention time bound.
+        tol : float, optional
+            The m/z tolerance in parts-per-million (ppm).
+        """
+        rt_min = 0 if rt_min is None else rt_min
+        rt_max = max(self.ret_times) if rt_max is None else rt_max
+
+        offsets = self.offsets
+        if offsets is None:
+            offsets = np.array(self.mz_arrays.snapshot().layout.starts)
+
+        if self.mask is not None:
+            mask = self.mask
+        else:
+            mask = np.index_exp[:]
+
+        feature_data = _extract_feature(
+            moverz=moverz,
+            rt_min=rt_min,
+            rt_max=rt_max,
+            tol=tol,
+            mz_arrays=self.mz_arrays.snapshot(),
+            int_arrays=self.intensity_arrays.snapshot(),
+            ret_times=self.ret_times.snapshot(),
+            offsets=offsets,
         )
+        return Feature(moverz, *feature_data)
+
+    def add_spectrum(self, mz_array, intensity_array, ret_time):
+        """Add a mass spectrum.
+
+        Parameters
+        ----------
+        mz_array : np.ndarray
+            The m/z values.
+        intensity_array : np.ndarray
+            The intensity values.
+        ret_time : float
+            The retention time.
+        """
+        self.mz_arrays.append(mz_array)
+        self.intensity_arrays.append(intensity_array)
+        self.ret_times.append(float(ret_time))
+
+
+@nb.njit
+def _idx2loc(idx, offsets):
+    """Get the location of a peak from the 1D index.
+
+    Parameters
+    ----------
+    idx : int
+        The index of the peak in the flattened array.
+    offsets : np.ndarray
+        The offsets indicating the start of each spectrum.
+
+    Returns
+    -------
+    spec_idx : int
+        The spectrum that the peak is from.
+    peak_idx : int
+        The index of the peak within the spectrum.
+    """
+    spec_idx = np.searchsorted(offsets, idx, side="right") - 1
+    peak_idx = idx - offsets[spec_idx]
+    return spec_idx, peak_idx
+
+
+@nb.njit
+def _extract_feature(
+    moverzs,
+    rt_min,
+    rt_max,
+    tol,
+    mz_arrays,
+    int_arrays,
+    ret_times,
+    offsets,
+):
+    """Extract the ion chromatogram.
+
+    Parameters
+    ----------
+    moverzs : np.ndarray of float
+        The m/z values to extract.
+    rt_min : float, optional
+        The lower retention time bound.
+    rt_max : float, optional
+        The upper retention time bound.
+    tol : float, optional
+        The m/z tolerance in parts-per-million (ppm).
+    mz_arrays : awkward.Array
+        The m/z arrays
+    int_arrays : awkward.Array
+        The intensity arrays.
+    ret_times : awkward.Array
+        The retention time array.
+
+    Returns
+    -------
+    peak_array : np.ndarray
+        The indicies of peaks used.
+    rt_array : np.ndarray
+        The retention times of the peaks.
+    mz_array : np.ndarray
+        The m/z values of the peaks.
+    int_array : np.ndarray
+        The intensities of the peaks.
+    """
+    mz_tol = tol * moverz / 1e6
+    mz_min = moverz - mz_tol
+    mz_max = moverz + mz_tol
+
+    ret_times = np.array(ret_times)
+    within_rt = np.where((ret_times >= rt_min) & (ret_times <= rt_max))[0]
+    rt_array = ret_times[within_rt]
+
+    dims = (moverzs.shape[0], rt_array.shape[0])
+    peak_array = np.empty(dims, dtype="int")
+    peak_array[:] = None
+    mz_array = np.zeros(dims)
+    int_array = np.zeros(dims)
+
+    within_rt = set(within_rt)
+    for idx, (mz_spec, int_spec) in enumerate(zip(mz_arrays, int_arrays)):
+        if idx not in within_rt:
+            continue
+
+        mz_spec = np.array(mz_spec)
+        int_spec = np.array(int_spec)
+        within_mz = np.where((mz_spec >= mz_min) & (mz_spec <= mz_max))[0]
+        if not len(within_mz):
+            mz_array.append(0)
+            int_array.append(0)
+            continue
+
+        max_peak = np.argmax(int_spec[within_mz])
+        max_idx = within_mz[max_peak]
+        mz_array.append(mz_spec[max_idx])
+        int_array.append(int_spec[max_idx])
+        peak_array.append(offsets[idx] + max_idx)
+
+    return (
+        np.array(peak_array),
+        rt_array,
+        np.array(mz_array),
+        np.array(int_array),
+    )

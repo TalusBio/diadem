@@ -16,10 +16,10 @@ class Feature:
     """A chromatographic feature for a specific m/z"""
 
     query_mz: int
-    query_rt: float
-    mean_mz: int
-    ret_times: np.ndarray
-    intensities: np.ndarray
+    peaks: np.ndarray
+    rt_array: np.ndarray
+    mz_array: np.ndarray
+    intensity_array: np.ndarray
     lower_bound: int = 0
     upper_bound: int = -1
 
@@ -30,9 +30,14 @@ class Feature:
         self._peak = None
 
     @property
+    def moverz(self):
+        """The mean moverz value for the feature."""
+        return self.mz_array.mean()
+
+    @property
     def ret_time_bounds(self):
         """The min and max retention times."""
-        return self.ret_times.min(), self.ret_times.max()
+        return self.rt_array.min(), self.rt_array.max()
 
     @property
     def lower_bound(self):
@@ -61,7 +66,10 @@ class Feature:
         """The integrated peak area"""
         if (self._area is None) or (self._background is None):
             self._area = integrate(
-                self.peak, self.ret_times, self.lower_bound, self.upper_bound
+                self.peak,
+                self.rt_array,
+                self.lower_bound,
+                self.upper_bound,
             )
 
         return self._area
@@ -71,7 +79,7 @@ class Feature:
         """The median background intensity"""
         if self._background is None:
             self._background = calc_background(
-                self.intensities,
+                self.intensity_array,
                 self.lower_bound,
                 self.upper_bound,
             )
@@ -83,7 +91,7 @@ class Feature:
         """The corrected intensities for the integrated region."""
         if self._peak is None:
             self._peak = calc_peak(
-                self.intensities,
+                self.intensity_array,
                 self.lower_bound,
                 self.upper_bound,
                 self.background,
@@ -93,8 +101,8 @@ class Feature:
 
     def update_bounds(self) -> None:
         """Update the integration boundaries for a feature."""
-        center = np.argmax(self.intensities)
-        width, *_ = signal.peak_widths(self.intensities, [center], 0.5)
+        center = np.argmax(self.intensity_array)
+        width, *_ = signal.peak_widths(self.intensity_array, [center], 0.5)
         sigma2 = width * FWHM_RATIO
         self.lower_bound = int(np.floor(center - sigma2))
         self.upper_bound = int(np.ceil(center + sigma2))
@@ -134,70 +142,3 @@ def integrate(peak, ret_times, lower_bound, upper_bound):
     """
     peak_rt = ret_times[lower_bound:upper_bound]
     return np.trapz(peak, peak_rt)
-
-
-@nb.njit
-def extract_feature(
-    query_mz: int,
-    query_rt: float,
-    mz_array: np.ndarray,
-    int_array: np.ndarray,
-    rt_array: np.ndarray,
-    mz_tol: float,
-    rt_tol: float,
-) -> List[int]:
-    """Quickly get the indices of feature peaks.
-
-    Returns
-    -------
-    numpy.ndarray
-        The indices of the matching peak.
-    """
-    mz_tol = int(mz_tol * query_mz / 1e6)
-    mz_bounds = (query_mz - mz_tol, query_mz + mz_tol)
-    rt_bounds = (query_rt - rt_tol, query_rt + rt_tol)
-
-    # Because the data should be sorted by rt then intensity,
-    # the first peak encountered at each m/z is the most intense.
-    feat_xic = []
-    feat_mz = []
-    feat_rt = []
-    feat_idx = []
-    used_rt = False
-    arrays = zip(mz_array, rt_array, int_array)
-    for idx, (mz, rt, int_) in enumerate(arrays):
-        if rt > rt_bounds[1]:
-            break
-
-        if rt < rt_bounds[0]:
-            continue
-
-        if not feat_rt or rt != feat_rt[-1]:
-            if len(feat_rt) != len(feat_xic):
-                feat_xic.append(0)
-
-            feat_rt.append(rt)
-            used_rt = False
-
-        if used_rt or mz < mz_bounds[0] or mz > mz_bounds[1]:
-            continue
-
-        feat_mz.append(mz)
-        feat_xic.append(int_)
-        feat_idx.append(idx)
-        used_rt = True
-
-    # If the m/z wasnt found in the last scan:
-    if len(feat_rt) != len(feat_xic):
-        feat_xic.append(0)
-
-    if not feat_mz:
-        return None, None
-
-    feature = (
-        np.array(feat_mz).mean(),
-        np.array(feat_rt),
-        np.array(feat_xic),
-    )
-
-    return feature, feat_idx

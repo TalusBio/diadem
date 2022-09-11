@@ -3,24 +3,33 @@ import time
 from typing import List, Union
 from dataclasses import dataclass
 
+import numba as nb
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from . import scoring
-from .feature import Feature, extract_feature
-from .peptides import PeptideDB
-from .msdata import DIARunDB
+from . import feature
+from . import score_functions
+from .feature import Feature
+from .index import FragmentIndex
+from .msdata import DiaRun
 
 
 @dataclass
 class PeptideScore:
     """The scores for a precursor"""
 
-    index: int
+    seq: str
+    mods: List[float]
     features: List[Feature]
     score: float
-    target: bool
+    is_decoy: bool
+
+    @property
+    def peaks(self):
+        """Return the peak indices used in the features."""
+        peak_idx = np.hstack([f.peaks for f in self.features])
+        return peak_idx
 
 
 class PeptideSearcher:
@@ -28,12 +37,12 @@ class PeptideSearcher:
 
     Parameters
     ----------
-    run : DIARunDB
+    run : DiaRun
         The DIA data to use.
-    peptides : PeptideDB
+    index : FragmentIndex
         The peptide inverted index to use.
-    width : float
-        The maximum width of a chromatographic peak in seconds.
+    peak_width : float
+        The maximum width of a chromatographic peak in minutes.
     tol : float
         The fragment ion matching tolerance.
     open_ : bool
@@ -46,9 +55,9 @@ class PeptideSearcher:
 
     def __init__(
         self,
-        run: DIARunDB,
-        peptides: PeptideDB,
-        width: float = 1.0,
+        run: DiaRun,
+        index: FragmentIndex,
+        peak_width: float = 1.0,
         tol: float = 10,
         open_: bool = True,
         min_corr: float = 0.9,
@@ -56,15 +65,12 @@ class PeptideSearcher:
     ) -> None:
         """Initialize a PeptideSearcher"""
         self._run = run
-        self._peptides = peptides
-        self._width = width
+        self._index = index
+        self._peak_width = peak_width
         self._tol = tol
         self._open = open_
         self._min_corr = min_corr
         self._rng = np.random.default_rng(rng)
-
-        with self._run:
-            self._windows = self._run.windows
 
     def search(self) -> List[PeptideScore]:
         """Search the data.
@@ -75,14 +81,12 @@ class PeptideSearcher:
             The scored peptides.
         """
         peptide_scores = []
-        for window in self._windows:
+        for key, window in self._run.windows.items():
             scorer = WindowScorer(
-                run=self._run,
-                peptides=self._peptides,
                 window=window,
-                width=self._width,
+                index=self._index,
+                peak_width=self._peak_width,
                 tol=self._tol,
-                open_=self._open,
                 min_corr=self._min_corr,
                 rng=self._rng.integers(9999),
             )
@@ -97,18 +101,14 @@ class WindowScorer:
 
     Parameters
     ----------
-    run : DIARunDB
-        The DIA data to use.
-    peptides : PeptideDB
-        The peptide inverted index to use.
-    window : tuple of float
-        The m/z boundaries of the DIA window to search.
-    width : float
+    window : DiaWindow
+        The DIA isolation window to search.
+    index : FragmentIndex
+        The fragment index to use.
+    peak_width : float
         The maximum width of a chromatographic peak.
     tol : float
         The fragment ion matching tolerance.
-    open_ : bool
-        Open-modification search?
     min_corr : float, optional
         The minimum correlation for a feature group.
     rng : int of numpy.random.Generator
@@ -117,100 +117,23 @@ class WindowScorer:
 
     def __init__(
         self,
-        run,
-        peptides,
         window,
-        width,
+        index,
+        peak_width,
         tol,
-        open_,
         min_corr,
         rng,
     ):
         """Initialize a BaseWindowScorer"""
-        self._run = run
-        self._peptides = peptides
         self._window = window
-        self._width = width
+        self._index = index
+        self._peak_width = peak_width
         self._tol = tol
-        self._open = bool(open_)
         self._min_corr = min_corr
         self._rng = np.random.default_rng(rng)
 
         self._pbar = None
         self._unmatched_peaks = 0
-
-        with self._run:
-            self._n_peaks = self._run.n_peaks
-            self._peaks = pd.read_sql(
-                """
-                SELECT fi.* FROM fragment_ions AS fi
-                JOIN fragments AS fr
-                    ON fi.spectrum_idx=fr.spectrum_idx
-                WHERE fr.isolation_window_lower >= ?
-                    AND fr.isolation_window_upper <= ?
-                """,
-                self._run.con,
-                params=self._window,
-            )
-            self._scans = pd.read_sql(
-                """
-                SELECT spectrum_idx, scan_start_time FROM fragments
-                WHERE isolation_window_lower >= ?
-                    AND isolation_window_upper <= ?
-                """,
-                self._run.con,
-                params=self._window,
-            )
-
-        # Sort by intensity within each spectrum:
-        self._peaks = (
-            self._peaks.merge(self._scans, how="left")
-            .sort_values(
-                ["scan_start_time", "intensity"],
-                ascending=[True, False],
-            )
-            .reset_index(drop=True)
-        )
-
-        # Indices of all peaks ordered by abundance:
-        self._order = list(np.argsort(-self._peaks["intensity"].values))
-
-    def __iter__(self):
-        """Iterate through the features in a run"""
-        return self
-
-    def __next__(self):
-        """Return the next most intense feature.
-
-        Returns
-        -------
-        mean_mz : int
-            The mean integerized m/z of the feature.
-        peak_area : float
-            The baseline-subtracted peak area of the feature.
-        bounds : tuple of int
-            The peak boundaries
-        idx_bounds : tuple of int
-            The spectrum bounds.
-
-
-        """
-        if self._peaks.empty:
-            raise StopIteration
-
-        peak = self._peaks.loc[self._order[:1], :]
-        query = (int(peak["mz"]), float(peak["scan_start_time"]))
-        feat_info, _ = extract_feature(
-            *query,
-            mz_array=self._peaks["mz"].to_numpy(),
-            int_array=self._peaks["intensity"].to_numpy(),
-            rt_array=self._peaks["scan_start_time"].to_numpy(),
-            mz_tol=self._tol,
-            rt_tol=self._width,
-        )
-        feature = Feature(*query, *feat_info)
-        feature.update_bounds()
-        return feature
 
     def search(self):
         """Perform the database search
@@ -221,134 +144,160 @@ class WindowScorer:
             The scored peptides
         """
         scores = []
-        desc = f"Searching m/z {self._window[0]:.2f}-" f"{self._window[1]:.2f}"
-        self._pbar = tqdm(
-            desc=desc,
-            unit="peaks",
-            total=self._n_peaks,
-        )
-        for feature in self:
-            pfm = self._score_corr_features(feature)
-            if pfm is not None:
-                scores.append(pfm)
+        with self._window as win:
+            pbar = tqdm(unit="peaks", total=len(win))
+            for peak in win:
+                mz, _, rt = win.peak(peak)
+                feat = win.xic(
+                    mz,
+                    rt - self._peak_width,
+                    rt + self._peak_width,
+                    self._tol,
+                )
+                pfm = self._score_peptides(feat)
+                win.consume(peak)
+                pbar.update(1)
+                if pfm is not None:
+                    scores.append(pfm)
+                    pfm_peaks = pfm.peaks
+                    win.consume(pfm_peaks)
+                    pbar.update(len(pfm_peaks))
 
-        self._pbar.close()
+            pbar.close()
         return scores
 
-    def _score_corr_features(self, query_feature):
-        """Find features that are correlated with the query feature.
+    def _score_peptides(self, query_feature):
+        """Score peptides agains the query feature.
 
         Parameters
         ----------
-        fragment_list : list of list of int
-            The fragment ions to for each precursor.
-        area : float
-            The peak area of the query feature.
-        bounds : tuple of int
-            Indices of the integration bounds for the query feature.
-        spectra : tuple of int
-            Boundary spectrum indices for the query feature.
+        query_feature : Feature
+            A query feature.
 
         Returns
         -------
         PeptideScore
-            The best score precursor for the feature.
+            The best scoring peptide for the feature.
         """
-        query_mz = int(query_feature.mean_mz)
+        query_feature.update_bounds()
+        query_mz = query_feature.moverz
         rt_bounds = query_feature.ret_time_bounds
-
-        # Get candidates:
-        with self._peptides:
-            precursors, fragments = self._lookup_precursors(query_mz)
-
-        # Get a smaller list of peaks:
-        within_rt = self._peaks["scan_start_time"].between(*rt_bounds)
-        peaks = self._peaks.loc[within_rt]
-        offset = peaks.index.min()
-        mz_array = peaks["mz"].to_numpy()
-        int_array = peaks["intensity"].to_numpy()
-        rt_array = peaks["scan_start_time"].to_numpy()
-
-        eliminated = set()
-
-        # Find the best scoring peptide:
-        best_peptide = None
-        best_rows = []
-        best_score = -np.inf
-        features = []
-        for prec, frags in zip(precursors, fragments):
-            score_val, feat_info, rows = scoring.score_precursor(
-                query_mz=query_mz,
-                query_rt=query_feature.query_rt,
-                query_peak=query_feature.peak,
-                lower_bound=query_feature.lower_bound,
-                upper_bound=query_feature.upper_bound,
-                frag_array=np.array(frags),
-                mz_array=mz_array,
-                int_array=int_array,
-                rt_array=rt_array,
-                mz_tol=self._tol,
-                rt_tol=self._width,
-                min_corr=self._min_corr,
-            )
-            if score_val < best_score:
+        seq_scores, feats_used = [], []
+        precursors = self._index.precursors_from_fragment(query_mz, self._tol)
+        for seq, mods, is_decoy in precursors:
+            feats = [
+                self._window.xic(f, *rt_bounds, tol=self._tol)
+                for f in self._index.fragments(seq, mods)
+            ]
+            if not feats:
                 continue
 
-            if score_val == best_score:
-                # Break ties randomly
-                if self._rng.integers(1, endpoint=True):
-                    continue
-
-            features = [Feature(*f) for f in feat_info]
-            best_rows = rows + offset
-            best_peptide = PeptideScore(
-                index=prec[0],
-                features=features,
-                score=score_val,
-                target=prec[1],
+            seq_score, used = score(
+                query_feature.peak,
+                tuple(f.intensity_array for f in feats),
+                query_feature.lower_bound,
+                query_feature.upper_bound,
+                query_feature.rt_array,
+                self._min_corr,
+                score_functions.mini_hyperscore,
             )
 
-        self._peaks = self._peaks.drop(best_rows)
-        best_rows = set(best_rows)
-        self._order = [i for i in self._order if i not in best_rows]
-        self._pbar.update(len(best_rows))
-        return best_peptide
+            seq_scores.append(seq_score)
+            feats_used.append([f for f, u in zip(feats, used) if u])
 
-    def _lookup_precursors(self, fragment_mz):
-        """Look up the precursor that generated a fragment m/z
+        if not seq_scores:
+            return None
 
-        Parameters
-        ----------
-        fragment_mz : int
-            The integerized fragment m/z to look up.
-
-        Return
-        ------
-        precursors : list of int
-            The precursor indices.
-        fragments : list of list of int
-            The fragment m/z corresponding to each precursor.
-        """
-        if self._open:
-            prec_mz = None
-        else:
-            prec_mz = self._window
-
-        t1 = time.time()
-        precursors = self._peptides.fragment_to_precursors(
-            fragment_mz,
-            self._tol,
-            prec_mz,
+        winner = np.argmax(np.array(seq_scores))
+        return PeptideScore(
+            seq,
+            mods,
+            [query_feature] + feats_used[winner],
+            seq_scores[winner],
+            is_decoy,
         )
-        t2 = time.time()
 
-        prec_idx = [p[0] for p in precursors]
-        t3 = time.time()
-        fragments = self._peptides.precursors_to_fragments(
-            prec_idx,
-            to_int=True,
+
+@nb.njit
+def score(
+    query_peak,
+    frag_arrays,
+    lower_bound,
+    upper_bound,
+    rt_array,
+    min_corr,
+    score_fn,
+):
+    """Score a peptide against a collection of features.
+
+    Parameters
+    ----------
+    query_peak : np.ndarray
+        The query feature peak.
+    frag_arrays : tuple of np.ndarray
+        The intensity arrays of the other fragments.
+    lower_bound : int
+        The lower bound of the integrated query feature.
+    upper_bound : int
+        The upper bound of the integrated query feature.
+    rt_array : np.ndarray
+        The retention time array for the feature.
+    min_corr : float
+        The minimum allowed correlation.
+    score_fn : Callable
+        The score function to use.
+
+    Returns
+    -------
+    np.ndarray
+        The correlation for each vector.
+    """
+    x_diffs = query_peak - np.mean(query_peak)
+    x_rss = np.sum(x_diffs**2)
+
+    corr = []
+    areas = []
+    for idx, array in enumerate(frag_arrays):
+        if (array > 0).sum() < (0.25 * len(array)):
+            corr.append(0)
+            areas.append(0)
+            continue
+
+        # For the Pearson Correlation:
+        peak = feature.calc_peak(array, lower_bound, upper_bound)
+        y_diffs = peak - np.mean(peak)
+        denom = np.sqrt(x_rss * np.sum(y_diffs**2))
+        if not denom:
+            corr.append(0)
+            areas.append(0)
+            continue
+
+        corr.append(np.sum(x_diffs * y_diffs) / denom)
+        if corr[idx] < min_corr:
+            areas.append(0)
+            continue
+
+        areas.append(
+            feature.integrate(
+                peak,
+                rt_array,
+                lower_bound,
+                upper_bound,
+            )
         )
-        t4 = time.time()
-        print(t2 - t1, t4 - t3)
 
-        return precursors, fragments
+    areas.append(
+        feature.integrate(
+            query_peak,
+            rt_array,
+            lower_bound,
+            upper_bound,
+        )
+    )
+
+    areas = np.array(areas)
+    corr = np.array(corr)
+
+    score_val = score_fn(areas)
+    used = corr >= min_corr
+    return score_val, used

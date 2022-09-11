@@ -1,5 +1,4 @@
 """Amino acid masses and other useful mass spectrometry calculations"""
-import re
 import numpy as np
 import numba as nb
 from numba.typed import Dict
@@ -57,7 +56,7 @@ class PeptideMasses:
         "c": 0.0,
     }
 
-    def __init__(self, masses=None, precision=5):
+    def __init__(self, masses=None):
         """Initialize the PeptideMasses object"""
         self.masses = Dict.empty(
             key_type=nb.types.unicode_type,
@@ -65,28 +64,12 @@ class PeptideMasses:
         )
 
         self.masses.update(self._masses)
-        self.precision = precision
         if masses is not None:
             self.masses.update(masses)
 
     def __len__(self):
         """The number of defined amino acids."""
         return len(self.masses)
-
-    def to_float(self, mz_int):
-        """Convert an integerized m/z back to a floating point representation.
-
-        Parameters
-        ----------
-        mz_int : int
-            The integerized m/z
-
-        Returns
-        -------
-        float
-            The canonical m/z value.
-        """
-        return _int2mz(mz_int, self.precision)
 
     def precursor(self, seq, mods=None, charge=None, n_isotopes=3):
         """Calculate the precursor mass of a peptide sequence.
@@ -110,18 +93,23 @@ class PeptideMasses:
         float
             The precurosr monoisotopic m/z and requested C13 isotopes.
         """
-        args = (seq, mods, charge, n_isotopes, self.precision, self.masses)
-        for prec in _calc_precursor_mass(*args):
+        for prec in _calc_precursor_mass(
+            seq=seq,
+            mods=mods,
+            charge=charge,
+            n_isotopes=n_isotopes,
+            vocab=self.masses,
+        ):
             yield prec
 
-    def fragments(self, seq, mods=None, charge=2):
-        """Calculate the b and y ions for a peptide sequence.
+    def fragments(self, seqs, mods=None, charge=2):
+        """Calculate the b and y ions for peptide sequences.
 
         Parameters
         ----------
-        seq : str
-            The peptide sequence, without modifications.
-        mods : list of float, optional
+        seqs : tuple of str
+            The peptide sequences, without modifications.
+        mods : tuple of np.ndarray(float), optional
             Modification masses to consider at each position. The lengths of
             mods should be the length of seq plus two to account for N- and
             C-terminal modifications.
@@ -129,14 +117,12 @@ class PeptideMasses:
             The precursor charge state to consider. If 1, only +1 fragment ions
             are returned. Otherwise, +2 fragment ions are returned.
 
-        Yields
-        ------
-        float
+        Returns
+        -------
+        tuple of np.ndarray
             The m/z of the predicted b and y ions.
         """
-        args = (seq, mods, charge, self.precision, self.masses)
-        for frag in _calc_fragment_masses(*args):
-            yield frag
+        return _calc_fragments(seqs, mods, charge, self.masses)
 
 
 ############################################################
@@ -180,7 +166,7 @@ def _seq2mass(seq, mods, vocab):
 
 
 @nb.njit
-def _calc_precursor_mass(seq, mods, charge, n_isotopes, precision, vocab):
+def _calc_precursor_mass(seq, mods, charge, n_isotopes, vocab):
     """Calculate the precursor mass of a peptide sequence
 
     Parameters
@@ -192,8 +178,8 @@ def _calc_precursor_mass(seq, mods, charge, n_isotopes, precision, vocab):
     n_isotopes : int
         The number of C13 isotopes to return, starting from the
         monoisotopic mass.
-    precision : int
-        How many decimal places to retain.
+    vocab : numba.typed.Dict
+        The amino acid vocabulary.
 
     Yields
     ------
@@ -208,93 +194,93 @@ def _calc_precursor_mass(seq, mods, charge, n_isotopes, precision, vocab):
         if charge is not None:
             mass = _mass2mz(mass, charge)
 
-        yield _mz2int(mass, precision)
+        yield mass
 
 
-@nb.njit
-def _calc_fragment_masses(seq, mods, charge, precision, vocab):
+@nb.njit(parallel=True, nogil=True, fastmath=True)
+def _calc_fragments(seqs, mods, charge, vocab):
+    """Calculate the b and y ions for peptide sequences.
+
+    Parameters
+    ----------
+    seqs : tuple of str
+        The peptide sequence, without modifications.
+    mods : tuple of np.ndarray(float), optional
+        Modification masses to consider at each position. The lengths of
+        mods should be the length of seq plus two to account for N- and
+        C-terminal modifications.
+    charge : int, optional
+        The precursor charge state to consider. If 1, only +1 fragment ions
+        are returned. Otherwise, +2 fragment ions are returned.
+
+    Returns
+    -------
+    list of np.ndarray
+        The m/z of the predicted b and y ions.
+    """
+    out = []
+    for idx in nb.prange(len(seqs)):
+        if mods is None:
+            mod = None
+        else:
+            mod = mods[idx]
+
+        frags = _calc_fragment_masses(seqs[idx], mod, charge, vocab)
+        out.append(frags)
+
+    return out
+
+
+@nb.njit(fastmath=True)
+def _calc_fragment_masses(seq, mods, charge, vocab):
     """Calculate the b and y ions for a peptide sequence.
 
     Parameters
     ----------
     seq : np.array
         The mass at each position.
+    mods : np.ndarray
+        The modifications at each position.
     charge : int, optional
         The precursor charge state to consider. If 1, only +1 fragment ions
         are returned. Otherwise, +2 fragment ions are returned.
-    masses : nb.typed.Dict
-        The mass dictionary to use.
-    precision : int
-        How many decimal places to retain.
+    vocab : numba.typed.Dict
+        The amino acid vocabulary.
 
-    Yields
-    ------
-    float
+    Returns
+    -------
+    np.ndarray
         The m/z of the predicted b and y ions.
     """
     seq = _seq2mass(seq, mods, vocab)
     max_charge = min(charge, 2)
-    for idx in range(2, len(seq)):
-        b_mass = seq[:idx].sum()
-        y_mass = seq[idx:].sum() + H2O
+    b_mass = 0
+    y_mass = H2O
+
+    out = []
+    for idx in nb.prange(1, len(seq) - 2):
+        b_mass += seq[idx]
+        y_mass += seq[-(idx + 1)]
         for cur_charge in range(1, max_charge + 1):
             for frag in [b_mass, y_mass]:
                 mz = _mass2mz(frag, cur_charge)
-                yield _mz2int(mz, precision)
+                out.append(mz)
+
+    return np.array(out)
 
 
 @nb.njit
 def _mass2mz(mass, charge):
     """Calculate the m/z
-
     Parameters
     ----------
     mass : float
         The neutral mass.
     charge : int
         The charge.
-
     Returns
     -------
     float
        The m/z
     """
     return (mass / charge) + PROTON
-
-
-@nb.njit
-def _mz2int(moverz, precision):
-    """Convert an m/z to an int
-
-    Parameters
-    ----------
-    moverz : float
-        The m/z value to convert.
-    precision : int
-        How many decimal places to retain.
-
-    Returns
-    -------
-    int
-        The intergerized m/z value.
-    """
-    return int(moverz * 10**precision)
-
-
-@nb.njit
-def _int2mz(mz_int, precision):
-    """Convert an integer to the m/z.
-
-    Parameters
-    ----------
-    mz_int : int
-        The integerized m/z value.
-    precision : int
-        How many decimal places were retained.
-
-    Returns
-    -------
-    float
-        The m/z value.
-    """
-    return mz_int / 10**precision

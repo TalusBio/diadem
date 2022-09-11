@@ -49,11 +49,11 @@ class FragmentIndex:
         Temove methionine residues that occur at the protein N-terminus.
         Setting to `True` retains the original peptide and adds the clipped
         peptide to the database.
-    charge_states : list of int, optional
-        The charge states to consider.
+    max_charge : list of int, optional
+        The maximum fragement charge state to consider.
     semi : bool, optional
-        Require only on enzymatic terminus. Note that the protein database may
-        become very large if set to True.
+        Require only on enzymatic terminus. Note that the index may
+        become infeasibly large if set to True.
     decoy_prefix : str, optional
         The prefix prepended to decoy protein names.
     rng : int or numpy.random.Generator, optional
@@ -91,7 +91,7 @@ class FragmentIndex:
         min_length=6,
         max_length=50,
         clip_nterm_methionine=True,
-        charge_states=(2, 3),
+        max_charge=2,
         semi=False,
         decoy_prefix="decoy_",
         rng=None,
@@ -105,7 +105,7 @@ class FragmentIndex:
         self._min_length = min_length
         self._max_length = max_length
         self._clip_nterm_methionine = clip_nterm_methionine
-        self._charge_states = utils.listify(charge_states)
+        self._max_charge = max_charge
         self._semi = bool(semi)
         self._rng = np.random.default_rng(rng)
         self._decoy_prefix = decoy_prefix
@@ -115,7 +115,6 @@ class FragmentIndex:
         self.proteins = None
         self.peptides = None
         self.modified_peptides = None
-        self.precursors = None
         self.frag2prec = None
 
         # Set static modifications
@@ -190,11 +189,14 @@ class FragmentIndex:
         residues = set(self._peptide.masses.keys())
         self._read_fastas()
 
-        self.modification_blobs = []
         self.modified_peptides = []
-        self.precursors = []
-        self.frag2prec = defaultdict(list)
-        self.prec2frag = defaultdict(list)
+
+        # Create a Numba typed Dictionary for fast access
+        # and control over data types.
+        self.frag2prec = nb.typed.Dict.empty(
+            key_type=nb.core.types.uint32,
+            value_type=nb.core.types.uint32[:],
+        )
 
         skipped = []
         missing_aas = set()
@@ -218,46 +220,39 @@ class FragmentIndex:
                     self.modified_peptides.append(
                         (seq, packed_mods, not is_decoy)
                     )
-
-                    for charge in self._charge_states:
-                        prec_idx = len(self.precursors)
-                        self.precursors.append((mod_pep_idx, charge))
-                        frags = self.fragments(seq, mods, charge)
-                        for frag in frags:
-                            self.frag2prec[frag].append(prec_idx)
+                    frags = self.fragments((seq,), (mods,))[0]
+                    _add_fragment_ions(frags, mod_pep_idx, self.frag2prec)
 
         return self
 
-    def fragments(self, seq, mods, charge):
+    def fragments(self, seqs, mods):
         """Calculate the b and y ions for a peptide sequence.
 
         Parameters
         ----------
-        seq : str
+        seq : tuple of str
             The peptide sequence, without modifications.
-        mods : list of float, optional
+        mods : tuple of np.ndarray(float), optional
             Modification masses to consider at each position. The lengths of
             mods should be the length of seq plus two to account for N- and
             C-terminal modifications.
-        charge : int, optional
-            The precursor charge state to consider. If 1, only +1 fragment ions
-            are returned. Otherwise, +2 fragment ions are returned.
 
-        Yields
-        ------
-        int
-            The integerized m/z of the predicted b and y ions.
+        Returns
+        -------
+        np.ndarray
+            The m/z of the predicted b and y ions.
         """
-        for frag in self._peptide.fragments(seq, mods, charge):
-            yield frag
+        return self._peptide.fragments(seqs, mods, self._max_charge)
 
-    def precursors_from_fragment(self, frag):
+    def precursors_from_fragment(self, moverz, tol=10):
         """Look-up the precurors that may have generated a fragment ion.
 
         Parameters
         ----------
-        frag : int
-            The integerized fragment m/z.
+        moverz : float
+            The queryfragment m/z.
+        tol : float
+            The m/z tolerance in ppm.
 
         Yields
         ------
@@ -265,10 +260,8 @@ class FragmentIndex:
             The peptide sequence.
         mods : np.ndarray
             The modification masses at each position in the sequence.
-        charge : int
-            The charge of the precursor.
         """
-        for prec_idx in self.frag2prec[frag]:
+        for prec_idx in _lookup_fragment_ion(moverz, tol, self.frag2prec):
             yield self[prec_idx]
 
     def __getitem__(self, idx):
@@ -280,15 +273,12 @@ class FragmentIndex:
             The peptide sequence.
         mods : np.ndarray
             The modification masses at each position in the sequence.
-        charge : int
-            The charge of the precursor.
         is_decoy : bool
             Is the peptide a decoy?
         """
-        mod_pep_idx, charge = self.precursors[idx]
-        seq, packed_mods, is_decoy = self.modified_peptides[mod_pep_idx]
+        seq, packed_mods, is_decoy = self.modified_peptides[idx]
         mods = self._unpack_mods(packed_mods, len(seq))
-        return seq, mods, charge, is_decoy
+        return seq, mods, is_decoy
 
     def _read_fastas(self):
         """Read the fasta files, digesting the protein sequence."""
@@ -372,9 +362,70 @@ class FragmentIndex:
             The length of the peptide
         """
         unpacked = np.unpackbits(
-            packed_array, count=(pep_length + 2) * len(self._mod_order)
-        ).reshape((len(self._mod_order), -1))
-        return _onehot2mass(unpacked, self._mod_order)
+            packed_array,
+            count=(pep_length + 2) * len(self._mod_order),
+        )
+
+        masses = _onehot2mass(
+            unpacked.reshape((len(self._mod_order), -1)),
+            self._mod_order,
+        )
+
+        return masses
+
+
+@nb.njit
+def _add_fragment_ions(frags, mod_pep_idx, index):
+    """Add a fragment ions to the fragment index.
+
+    Parameters
+    ----------
+    frags : array of float
+        The m/z of the fragment ion to add.
+    mod_pep_idx : int
+        The index of the modified peptide sequence to add.
+    index : numba.typed.Dict
+        The dictionary mapping fragments to precursors.
+    """
+    for frag in 10**5 * frags:
+        key = nb.uint32(frag)
+        try:
+            index[key] = np.append(index[key], nb.uint32(mod_pep_idx))
+        except:
+            index[key] = np.array([mod_pep_idx], dtype=nb.uint32)
+
+
+@nb.njit
+def _lookup_fragment_ion(moverz, tol, index):
+    """Look up fragment ions in the fragment index.
+
+    Parameters
+    ----------
+    moverz : float
+        The m/z of the fragment ion to look up.
+    tol : float
+        The m/z tolerance in ppm
+    index : numba.typed.Dict
+        The dictionary mapping fragments to precursors.
+
+    Returns
+    -------
+    list of int
+        The precursors associated with the fragment.
+    """
+    mz_tol = tol * moverz / 1e6
+    start = np.floor(10**5 * (moverz - mz_tol))
+    end = np.ceil(10**5 * (moverz + mz_tol))
+
+    out = []
+    for key in range(start, end + 1):
+        try:
+            for prec in index[nb.uint32(key)]:
+                out.append(prec)
+        except:
+            pass
+
+    return out
 
 
 @nb.njit
@@ -446,3 +497,7 @@ def _group_proteins(proteins):
                     peptides[pep].remove(prot)
 
     return peptides
+
+
+def _list_dict():
+    return defaultdict(list)
