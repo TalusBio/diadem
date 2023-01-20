@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import copy
-import sqlite3
 from collections import defaultdict, namedtuple
 from pathlib import Path
-from sqlite3 import Connection
 from typing import Iterable, Iterator, TypedDict
 
 import numpy as np
 import pandas as pd
+from fastparquet import write as write_parquet
 from loguru import logger
 from ms2ml import Peptide
 from ms2ml.data.adapters import FastaAdapter
@@ -18,6 +17,7 @@ from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
+from diadem.index.caching import file_cache_dir
 from diadem.index.fragment_buckets import FragmentBucketList
 from diadem.utils import disabled_gc, make_decoy
 
@@ -281,37 +281,75 @@ class IndexedDb:
 
         return out
 
-    def gen_to_sqlite(self, sqlite_db: Path | str) -> None:
-        """Generates the database and writes it to a sqlite file.
+    def generate_to_parquet(self, dir: Path | str) -> None:
+        """Generates the fragments for the targets and decoys into parquet files.
 
-        Note that this does not change the database, and fragments
-        need to be populated later using the `index_from_sqlite` method.
+        It uses the targets and decoys stored in `self.targets` and `self.decoys`
+        to generate theoretical fragments (based on the `self.config` object).
+        And writes them to a pair of parquet files in the passed directory.
         """
-        conn = sqlite3.Connection(sqlite_db)
+        dir = Path(dir)
+        seq_file_path = dir / "seqs.parquet"
+        frag_file_path = dir / "frags.parquet"
 
-        SCHEMA = [  # noqa
-            (
-                "CREATE TABLE sequences("
-                " seq_id INTEGER primary key,"
-                " seq_mz REAL,"
-                " seq_proforma TEXT, decoy INTEGER)"
-            ),
-            "CREATE TABLE fragments( mz REAL, ion_series TEXT, seq_id INTEGER)",
-        ]
-
-        for x in SCHEMA:
-            conn.execute(x)
-            conn.commit()
-
-        last_id = self._insert_peptides_in_db(conn, self.targets, "Targets")
-        self._insert_peptides_in_db(
-            conn, self.decoys, "Decoys", decoy=True, start_id=last_id + 1
+        last_id = self._dump_peptides_parquet(
+            seq_file_path=seq_file_path,
+            fragment_file_path=frag_file_path,
+            peptides=self.targets,
+            name="Targets",
+            decoy=False,
         )
-        conn.close()
+        self._dump_peptides_parquet(
+            seq_file_path=seq_file_path,
+            fragment_file_path=frag_file_path,
+            peptides=self.decoys,
+            name="Decoys",
+            decoy=True,
+            start_id=last_id + 1,
+        )
 
-    def _insert_peptides_in_db(
+    def index_from_parquet(self, dir: Path | str) -> None:
+        """Generates as index from the passed directory of parquet files.
+
+        See Also
+        --------
+        self.generate_to_parquet
+        """
+        dir = Path(dir)
+        seq_file = dir / "seqs.parquet"
+        frag_file = dir / "frags.parquet"
+
+        seqs_df = pd.read_parquet(seq_file)
+
+        self.seq_prec_mzs = seqs_df["seq_mz"].values
+        self.seqs = seqs_df["seq_proforma"].values
+
+        self.target_proforma = set(
+            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
+        )
+
+        frags_df = pd.read_parquet(
+            frag_file,
+        )
+        frags_df = frags_df[frags_df["mz"] > self.config.ion_mz_range[0]]
+        frags_df = frags_df[frags_df["mz"] < self.config.ion_mz_range[1]]
+
+        self.target_proforma = set(
+            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
+        )
+        self.index_from_arrays(
+            frags_df["mz"].values,
+            frag_series=frags_df["ion_series"].values,
+            seq_ids=frags_df["seq_id"].values,
+            prec_mzs=seqs_df["seq_mz"].values,
+            prec_seqs=seqs_df["seq_proforma"].values,
+        )
+
+    # @profile
+    def _dump_peptides_parquet(
         self,
-        conn: Connection,
+        seq_file_path: Path,
+        fragment_file_path: Path,
         peptides: list[Peptide],
         name: str,
         decoy: bool = False,
@@ -334,28 +372,50 @@ class IndexedDb:
             miniters=one_pct,
         )
 
-        # TODO this looks ugly, refactor
+        seq_chunk = {
+            "seq_id": [],
+            "seq_mz": [],
+            "seq_proforma": [],
+            "decoy": [],
+        }
+        frag_chunk = {
+            "mz": [],
+            "ion_series": [],
+            "seq_id": [],
+        }
+
+        append = False
+        if seq_file_path.exists():
+            append = True
         for seq_id, (frag_mzs, ion_series, prec_mzs, prec_seqs, num_frags) in enumerate(
             (self.seq_properties(x) for x in iter_seqs), start=start_id
         ):
-            conn.execute(
-                "INSERT INTO sequences VALUES(?, ?, ?, ?)",
-                (
-                    seq_id,
-                    prec_mzs,
-                    prec_seqs,
-                    decoy,
-                ),
-            )
-            conn.executemany(
-                "INSERT INTO fragments VALUES(?, ?, ?)",
-                [
-                    (float(x), y, z)
-                    for x, y, z in zip(frag_mzs, ion_series, [seq_id] * num_frags)
-                ],
-            )
+            seq_chunk["seq_id"].append(seq_id)
+            seq_chunk["seq_mz"].append(prec_mzs)
+            seq_chunk["seq_proforma"].append(prec_seqs)
+            seq_chunk["decoy"].append(decoy)
 
-        conn.commit()
+            for x, y, z in zip(frag_mzs, ion_series, [seq_id] * num_frags):
+                frag_chunk["mz"].append(float(x))
+                frag_chunk["ion_series"].append(y)
+                frag_chunk["seq_id"].append(z)
+
+            if seq_id % one_pct == 0:
+                if seq_file_path.exists():
+                    append = True
+                write_parquet(seq_file_path, pd.DataFrame(seq_chunk), append=append)
+                write_parquet(
+                    fragment_file_path, pd.DataFrame(frag_chunk), append=append
+                )
+                for x in seq_chunk:
+                    seq_chunk[x] = []
+                for x in frag_chunk:
+                    frag_chunk[x] = []
+
+        if len(frag_chunk["mz"]):
+            write_parquet(seq_file_path, pd.DataFrame(seq_chunk), append=append)
+            write_parquet(fragment_file_path, pd.DataFrame(frag_chunk), append=append)
+
         return seq_id
 
     # @profile
@@ -415,44 +475,6 @@ class IndexedDb:
             seq_ids=seq_ids,
             prec_mzs=prec_mzs,
             prec_seqs=prec_seqs,
-        )
-
-    # @profile
-    def index_from_sqlite(self, sqlite_path: Path | str) -> None:
-        """Reads the indexed fragments from a sqlite database."""
-        logger.info(f"Reading indexed fragments from sqlite: {sqlite_path}")
-        conn = sqlite3.Connection(sqlite_path)
-
-        seqs_df = pd.read_sql_query(
-            "SELECT seq_id, seq_mz, seq_proforma, decoy FROM sequences",
-            conn,
-            dtype={"seq_id": "int", "seq_mz": "float32", "decoy": "bool"},
-        )
-
-        self.seq_prec_mzs = seqs_df["seq_mz"].values
-        self.seqs = seqs_df["seq_proforma"].values
-
-        self.target_proforma = set(
-            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
-        )
-
-        frags_df = pd.read_sql_query(
-            "SELECT mz, ion_series, seq_id FROM fragments WHERE mz >= ? and mz <= ?",
-            conn,
-            dtype={"mz": "float32", "seq_id": "int"},
-            params=(self.config.ion_mz_range[0], self.config.ion_mz_range[1]),
-        )
-        conn.close()
-
-        self.target_proforma = set(
-            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
-        )
-        self.index_from_arrays(
-            frags_df["mz"].values,
-            frag_series=frags_df["ion_series"].values,
-            seq_ids=frags_df["seq_id"].values,
-            prec_mzs=seqs_df["seq_mz"].values,
-            prec_seqs=seqs_df["seq_proforma"].values,
         )
 
     def index_from_arrays(
@@ -680,10 +702,13 @@ def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> In
     It internally checks the existance of a cache in the form of an sqlite file.
     Future implementations will allow cahching in the form of parquet.
     """
-    sql_path = Path(str(Path(fasta)) + ".ddm.frags.sqlite")
+    config_hash = str(abs(hash(config)))
+    file_cache = file_cache_dir(file=fasta)
+    curr_cache = file_cache / config_hash
+
     db = IndexedDb(chunksize=chunksize, config=config)
-    if not sql_path.exists():
+    if not curr_cache.exists():
         db.targets_from_fasta(fasta)
-        db.gen_to_sqlite(sqlite_db=sql_path)
-    db.index_from_sqlite(sqlite_path=sql_path)
+        db.generate_to_parquet(dir=curr_cache)
+    db.index_from_parquet(dir=curr_cache)
     return db
