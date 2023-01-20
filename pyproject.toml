@@ -26,6 +26,8 @@ dependencies = [
     "tqdm >= 4.64.1",
     "loguru >= 0.6.0",
     "rich-click >= 1.6.0",
+    "fastparquet >= 2022.11.0",
+    "platformdirs >= 2.6.0",
     # Deisotoping
     "brain-isotopic-distribution >= 1.5.11",
     "ms-peak-picker >= 0.1.40",
@@ -66,7 +68,8 @@ select = ["E", "F", "W", "C", "I", "D", "UP", "N", "ANN", "T20"]
 # D203 1 blank line required before class docstring
 # D100 Missing docstring in public module
 # ANN102 Missing type annotation for `cls` in classmethod
-ignore = ["D213", "ANN101", "D203", "D100", "ANN102"]
+# D401 First line of docstring should be in imperative mood
+ignore = ["D213", "ANN101", "D203", "D100", "ANN102", "D401"]
 
 fix = true
 

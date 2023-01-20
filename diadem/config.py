@@ -22,7 +22,7 @@ MassError = Literal["da", "ppm"]
 # TODO add chunksize to config ... and use it ...
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class DiademConfig:  # noqa
     g_tolerances: tuple[float, ...] = field(default=(20, 10))
     g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
@@ -84,11 +84,6 @@ class DiademConfig:  # noqa
         It exports all the parameters that are used inside of
         ms2ml to its own configuration object.
         """
-        if not hasattr(self, "_ms2ml_config"):
-            self._ms2ml_config = self._make_ms2ml_config()
-        return self._ms2ml_config
-
-    def _make_ms2ml_config(self) -> Config:
         conf = Config(
             g_tolerances=self.g_tolerances,
             g_tolerance_units=self.g_tolerance_units,
