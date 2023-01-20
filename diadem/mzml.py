@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import ms_deisotope
 import numpy as np
@@ -16,6 +16,23 @@ from tqdm.auto import tqdm
 
 from diadem.config import MassError
 from diadem.search.metrics import get_ref_trace_corrs
+
+try:
+    zip([], [], strict=True)
+
+    def strictzip(*args: Iterable) -> Iterable:
+        """Like zip but checks that the length of all elements is the same."""
+        return zip(*args, strict=True)
+
+except TypeError:
+
+    def strictzip(*args: Iterable) -> Iterable:
+        """Like zip but checks that the length of all elements is the same."""
+        args = [list(arg) for arg in args]
+        lengs = {len(x) for x in args}
+        if len(lengs) > 1:
+            raise ValueError("All arguments need to have the same legnths")
+        return zip(*args)
 
 
 @dataclass
@@ -126,10 +143,8 @@ class ScanGroup:
 
         match_win_mz_indices = np.unique(match_win_mz_indices)
 
-        # todo implement strict zip if you want more py<py3.10
-        for e, (i, s, si) in enumerate(
-            zip(range(*slc.indices(len(self))), scaling, window_indices, strict=True)
-        ):
+        zipped = strictzip(range(*slc.indices(len(self))), scaling, window_indices)
+        for i, s, si in zipped:
             for mz_i in match_win_mz_indices:
                 sim = si[mz_i]
                 if len(sim) > 0:
@@ -440,7 +455,7 @@ class StackedChromatograms:
                 )
             )
             if i == center_index:
-                assert xic_outs[-1][0].sum() > center_intensities.max()
+                assert xic_outs[-1][0].sum() >= center_intensities.max()
 
         stacked_arr = np.stack([x[0] for x in xic_outs], axis=-1)
         indices = [x[1] for x in xic_outs]

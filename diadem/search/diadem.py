@@ -252,7 +252,7 @@ def diadem_main(
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
-    results.to_parquet(prefix + ".parquet", index=False)
+    results.to_parquet(prefix + ".parquet", index=False, engine="pyarrow")
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Elapsed time: {elapsed_time}")
