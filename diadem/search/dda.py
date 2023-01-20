@@ -31,7 +31,7 @@ def score(db: IndexedDb, spec: Spectrum, mzml_stem: str) -> DataFrame | None:
         return spec_results
 
 
-def main(
+def dda_main(
     mzml_path: Path | str,
     fasta_path: Path | str,
     config: DiademConfig,

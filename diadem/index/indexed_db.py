@@ -708,6 +708,7 @@ def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> In
 
     db = IndexedDb(chunksize=chunksize, config=config)
     if not curr_cache.exists():
+        curr_cache.mkdir(parents=True)
         db.targets_from_fasta(fasta)
         db.generate_to_parquet(dir=curr_cache)
     db.index_from_parquet(dir=curr_cache)
