@@ -1,130 +1,170 @@
-"""Fixtures used for testing
-
-We need:
-- To set the PPX_DATA_DIR environment variable to a temporary directory
-- A mock GET response from PRIDE
-- A mock GET response from ProteomeXchange
-- A mock FTP server response from PRIDE
-- A mock FTP server response from MassIVE
-"""
-import json
-import socket
-import ftplib
-
+import numpy as np
 import pytest
-import requests
-
-import ppx
-
-# Set the PPX_DATA_DIRECTORY --------------------------------------------------
-@pytest.fixture(autouse=True)
-def ppx_data_dir(monkeypatch, tmp_path):
-    """Set the PPX_DATA_DIR environment variable"""
-    monkeypatch.setenv("PPX_DATA_DIR", str(tmp_path))
-    ppx.set_data_dir()
-
-
-# PRIDE projects/<accession>/files endpoint -----------------------------------
-class MockPrideFilesResponse:
-    """A mock of the PRIDE files REST response"""
-
-    status_code = 200
-
-    @staticmethod
-    def json():
-        with open("tests/data/pride_files_response.json") as ref:
-            out = json.load(ref)
-
-        return out
+from ms2ml import Peptide
 
 
 @pytest.fixture
-def mock_pride_files_response(monkeypatch):
-    """Patch requests.get() to use a local file."""
-
-    def mock_get(*args, **kwargs):
-        return MockPrideFilesResponse()
-
-    monkeypatch.setattr(requests, "get", mock_get)
-
-
-# PRIDE projects/<accession? endpoint -----------------------------------------
-class MockPrideProjectResponse:
-    """A mock of the PRIDE projects REST response"""
-
-    status_code = 200
-
-    @staticmethod
-    def json():
-        with open("tests/data/pride_project_response.json") as ref:
-            out = json.load(ref)
-
-        return out
+def sample_peaks():
+    """Sample predicted peaks for a single peptide."""
+    VPQVSTPTLVEVSR_peaks = [  # noqa
+        [175.118952167, 0.11523687839508057],
+        [197.12845446699998, 0.12554128468036652],
+        [262.150980167, 0.04191524535417557],
+        [325.187032467, 0.6335505247116089],
+        [361.219394167, 0.10234244912862778],
+        [424.255446467, 0.10666630417108536],
+        [490.26198716700003, 0.07077749073505402],
+        [511.28747446700004, 0.017693039029836655],
+        [589.330401167, 0.06628052890300751],
+        [612.335153467, 0.009312867186963558],
+        [702.414465167, 0.039480481296777725],
+        [803.462144167, 0.04876701161265373],
+        [900.514908167, 0.9805850386619568],
+        [923.5196604670001, 0.0028175432235002518],
+        [1001.5625871670001, 0.28157711029052734],
+        [1022.5880744670001, 0.0011550436029210687],
+        [1088.5946151670003, 1.0],
+        [1151.6306674670002, 0.0010816878639161587],
+        [1187.6630291670003, 0.538184642791748],
+        [1315.7216071670005, 0.2381279170513153],
+        [1337.7311094670004, 0.0012506503844633698],
+        [1412.7743711670005, 0.017968058586120605],
+        [402.234710317, 0.0010723050218075514],
+        [450.761092317, 0.033703941851854324],
+        [462.26346846700005, 0.0010208424646407366],
+        [501.28493181700003, 0.0032511476892977953],
+        [658.3644418170002, 0.0019166009733453393],
+        [706.8908238170002, 0.1397942751646042],
+    ]
+    mzs = np.array([x[0] for x in VPQVSTPTLVEVSR_peaks])
+    ints = np.array([x[1] for x in VPQVSTPTLVEVSR_peaks])
+    z2_mass = 756.4250
+    return mzs, ints, z2_mass
 
 
 @pytest.fixture
-def mock_pride_project_response(monkeypatch):
-    """Patch requests.get() to use a local file."""
+def albumin_peptides():
+    """All the peptides with charge 2 of the albumin tryptic digest."""
+    ALBUMIN_PEPTIDE_SEQS = [  # noqa
+        "SEVAHR",
+        "DLGEENFK",
+        "ALVLIAFAQYLQQCPFEDHVK",
+        "LVNEVTEFAK",
+        "TCVADESAENCDK",
+        "SLHTLFGDK",
+        "LCTVATLR",
+        "ETYGEMADCCAK",
+        "NECFLQHK",
+        "DDNPNLPR",
+        "LVRPEVDVMCTAFHDNEETFLK",
+        "YLYEIAR",
+        "HPYFYAPELLFFAK",
+        "AAFTECCQAADK",
+        "AACLLPK",
+        "CASLQK",
+        "AWAVAR",
+        "AEFAEVSK",
+        "LVTDLTK",
+        "VHTECCHGDLLECADDR",
+        "YICENQDSISSK",
+        "ECCEKPLLEK",
+        "NYAEAK",
+        "DVFLGMFLYEYAR",
+        "HPDYSVVLLLR",
+        "TYETTLEK",
+        "CCAAADPHECYAK",
+        "VFDEFKPLVEEPQNLIK",
+        "QNCELFEQLGEYK",
+        "FQNALLVR",
+        "VPQVSTPTLVEVSR",
+        "MPCAEDYLSVVLNQLCVLHEK",
+        "TPVSDR",
+        "CCTESLVNR",
+        "RPCFSALEVDETYVPK",
+        "EFNAETFTFHADICTLSEK",
+        "QTALVELVK",
+        "AVMDDFAAFVEK",
+        "ETCFAEEGK",
+        "LVAASQAALGLSEVAHR",
+        "DLGEENFK",
+        "ALVLIAFAQYLQQCPFEDHVK",
+        "LVNEVTEFAK",
+        "TCVADESAENCDK",
+        "SLHTLFGDK",
+        "LCTVATLR",
+        "ETYGEMADCCAK",
+        "NECFLQHK",
+        "DDNPNLPR",
+        "LVRPEVDVMCTAFHDNEETFLK",
+        "YLYEIAR",
+        "HPYFYAPELLFFAK",
+        "AAFTECCQAADK",
+        "AACLLPK",
+        "CASLQK",
+        "AWAVAR",
+        "AEFAEVSK",
+        "LVTDLTK",
+        "VHTECCHGDLLECADDR",
+        "YICENQDSISSK",
+        "ECCEKPLLEK",
+        "NYAEAK",
+        "DVFLGMFLYEYAR",
+        "HPDYSVVLLLR",
+        "TYETTLEK",
+        "CCAAADPHECYAK",
+        "VFDEFKPLVEEPQNLIK",
+        "QNCELFEQLGEYK",
+        "FQNALLVR",
+        "VPQVSTPTLVEVSR",
+        "MPCAEDYLSVVLNQLCVLHEK",
+        "TPVSDR",
+        "CCTESLVNR",
+        "RPCFSALEVDETYVPK",
+        "EFNAETFTFHADICTLSEK",
+        "QTALVELVK",
+        "AVMDDFAAFVEK",
+        "ETCFAEEGK",
+        "SEVAHR",
+        "DLGEENFK",
+        "ALVLIAFAQYLQQCPFEDHVK",
+        "LVNEVTEFAK",
+        "TCVADESAENCDK",
+        "SLHTLFGDK",
+        "LCTVATLR",
+        "ETYGEMADCCAK",
+        "NECFLQHK",
+        "DDNPNLPR",
+        "LVRPEVDVMCTAFHDNEETFLK",
+        "YLYEIAR",
+        "HPYFYAPELLFFAK",
+        "AAFTECCQAADK",
+        "AACLLPK",
+        "CASLQK",
+        "AWAVAR",
+        "AEFAEVSK",
+        "LVTDLTK",
+        "VHTECCHGDLLECADDR",
+        "YICENQDSISSK",
+        "ECCEKPLLEK",
+        "NYAEAK",
+        "DVFLGMFLYEYAR",
+        "HPDYSVVLLLR",
+        "TYETTLEK",
+        "CCAAADPHECYAK",
+        "VFDEFKPLVEEPQNLIK",
+        "QNCELFEQLGEYK",
+        "FQNALLVR",
+        "VPQVSTPTLVEVSR",
+        "MPCAEDYLSVVLNQLCVLHEK",
+        "TPVSDR",
+        "CCTESLVNR",
+        "RPCFSALEVDETYVPK",
+        "EFNAETFTFHADICTLSEK",
+        "QTALVELVK",
+        "AVMDDFAAFVEK",
+        "ETCFAEEGK",
+        "LVAASQAALGLLVAASQAALGL",
+    ]
 
-    def mock_get(*args, **kwargs):
-        return MockPrideProjectResponse()
-
-    monkeypatch.setattr(requests, "get", mock_get)
-
-
-# MassIVE FTP server ----------------------------------------------------------
-class MockMassiveFtpResponse:
-    """A mock of the MassIVE FTP server response"""
-
-    @staticmethod
-    def dir(fun):
-        with open("tests/data/massive_ftp_response.txt") as ref:
-            [fun(line) for line in ref]
-
-
-def mock_massive_ftp_response(monkeypatch):
-    """Patch ftplib to use a local file as a response"""
-
-    def null(*args, **kwargs):
-        pass
-
-    def mock_dir(fun):
-        with open("tests/data/massive_ftp_response.txt") as ref:
-            [fun(line) for line in ref]
-
-    monkeypatch.setattr(ftplib.FTP, "login", null)
-    monkeypatch.setattr(ftplib.FTP, "cwd", null)
-    monkeypatch.setattr(ftplib.FTP, "dir", mock_dir)
-
-
-# Mock up local files ---------------------------------------------------------
-@pytest.fixture
-def local_files(tmp_path):
-    """Create some files to test local file detection"""
-    local_dirs = [tmp_path / f"test_dir{i}" for i in range(10)]
-    local_files = []
-    for local_dir in local_dirs:
-        local_dir.mkdir()
-        files = [
-            local_dir / "test_file.mzML",
-            local_dir / "test_file.txt",
-        ]
-        local_files += files
-        for local_file in files:
-            local_file.touch()
-
-    local_files.append(tmp_path / "test_file.mzML")
-    local_files[-1].touch()
-    return local_files, local_dirs
-
-
-# Block internet --------------------------------------------------------------
-@pytest.fixture
-def block_internet(monkeypatch):
-    """Turn off internet access"""
-
-    class Blocker(socket.socket):
-        def __init__(self, *args, **kwargs):
-            raise OSError("Network call blocked")
-
-    monkeypatch.setattr(socket, "socket", Blocker)
+    out = [Peptide.from_proforma_seq(f"{x}/2") for x in ALBUMIN_PEPTIDE_SEQS]
+    return out

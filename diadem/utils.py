@@ -1,128 +1,127 @@
-"""Utility Functions"""
-import numba as nb
+import gc
+from contextlib import contextmanager
+
 import numpy as np
+from loguru import logger
+from ms2ml import Peptide
+from numpy.typing import NDArray
 
 
-def groupby_max(df, by_cols, max_col):
-    """Quickly get the indices for the maximum value of col"""
-    by_cols = listify(by_cols)
-    idx = (
-        df.sample(frac=1)
-        .sort_values(by_cols + [max_col], axis=0)
-        .drop_duplicates(by_cols, keep="last")
-        .index
-    )
+@contextmanager
+# @profile
+def disabled_gc() -> None:
+    """Context manager that disables the garbage collector.
 
-    return idx
+    Once the context manager finishes, it makes a full collection and
+    enables again the GC
 
+    Usage:
+    >   with disabled_gc():
+    >       # Do something where you dont want the gc enabled
 
-def listify(obj):
-    """Turn an object into a list, but don't split strings"""
+    """
     try:
-        assert not isinstance(obj, str)
-        iter(obj)
-    except (AssertionError, TypeError):
-        obj = [obj]
-
-    return list(obj)
-
-
-def bools2bytes(bool_array):
-    """Convert an array of booleans to a Bytes object.
-
-    From: https://stackoverflow.com/questions/32675679/
-    convert-binary-string-to-bytearray-in-python-3
-
-    Parameters
-    ----------
-    bool_array : list of bool
-        The array of booleans to convert to a Bytes object.
-
-    Returns
-    -------
-    Bytes
-        The encoded bitstring
-    """
-    bitstring = "".join(["1" if b else "0" for b in bool_array])
-    bits = int(bitstring, 2)
-    return bits.to_bytes((len(bitstring) + 7) // 8, byteorder="big")
+        logger.debug("Disabling GC")
+        gc.disable()
+        yield
+    finally:
+        logger.debug("Collecting GC")
+        gc.collect(0)
+        logger.debug("Enabling GC")
+        gc.enable()
 
 
-def bytes2bools(byte_obj):
-    """Convert a Bytes object back to an array of booleans.
+# From https://datagy.io/python-split-list/
+def chunk_array(arr: NDArray, chunksize: int) -> list[NDArray]:
+    """Splits an array into chunks of a given size.
 
     Parameters
     ----------
-    byte_obj : Bytes
-        The Bytes object to decode.
+    arr : NDArray
+        The array to split
+    chunksize : int
+        The size of the chunks
 
-    Returns
-    -------
-    list of bools
-        The array of booleans.
+
+    Examples
+    --------
+    >>> tmp = np.arange(5)
+    >>> chunk_array(tmp, 2)
+    [array([0, 1]), array([2, 3]), array([4])]
     """
-    bitstring = bin(int.from_bytes(byte_obj, byteorder="big"))
-    return [b == "1" for b in bitstring[2:]]
+    chunked_list = []
+    for i in range(0, len(arr), chunksize):
+        chunked_list.append(arr[i : i + chunksize])
+    return chunked_list
 
 
-def mz2int(moverz, precision=5):
-    """Convert an m/z to an int
+def make_decoy(pep: Peptide) -> Peptide:
+    """Makes a decoy peptide.
 
     Parameters
     ----------
-    moverz : float
-        The m/z value to convert.
-    precision : int
-        How many decimal places to retain.
+    pep : Peptide
+        The peptide to make a decoy of
 
-    Returns
-    -------
-    int
-        The intergerized m/z value.
+    Examples
+    --------
+    >>> pep = Peptide.from_sequence("LESLIEK/2")
+    >>> pep.to_proforma()
+    'LESLIEK/2'
+    >>> make_decoy(pep).to_proforma()
+    'LEILSEK/2'
     """
-    return int(moverz * 10**precision)
+    seq = pep.sequence
+    charge = pep.charge
+    seq = seq[:1] + list(reversed(seq[1:-1])) + seq[-1:]
+    properties = pep.properties
+    pep = Peptide(seq, properties=properties, config=pep.config, extras=pep.extras)
+    assert pep.charge == charge
+    return pep
 
 
-def int2mz(mzint, precision=5):
-    """Convert an integer to the m/z.
+def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
+    """Gets the slide indices that include a range.
 
     Parameters
     ----------
-    mzint : int
-        The integerized m/z value.
-    precision : int
-        How many decimal places were retained.
+    arr : NDArray
+        A sorted 1d array
+    minval : float
+        The minimum value to include
+    maxval : float
+        The maximum value to include
+    is_ends : bool
+        Whether the slice should include the first index
 
-    Returns
-    -------
-    float
-        The m/z value.
+    Examples
+    --------
+    >>> arr = np.array(range(500)) / 100
+    >>> minval = 2.3
+    >>> maxval = 3.8
+    >>> get_slice_inds(arr, minval, maxval)
+    slice(229, 381, None)
+    >>> arr = np.array(range(500))
+    >>> slc = get_slice_inds(arr, minval, maxval)
+    >>> slc
+    slice(2, 4, None)
+    >>> arr[slc]
+    array([2, 3])
     """
-    return mzint / 10**precision
+    slice_min = np.searchsorted(arr, minval, side="left") - 1
+    slice_min = max(0, slice_min)
+
+    # slice_max = np.searchsorted(arr[slice_min:], maxval, side="right")
+    # slice_max = slice_min + slice_max
+    i = 0
+    for i, val in enumerate(arr[slice_min:]):
+        if val > maxval:
+            break
+
+    slice_max = slice_min + i
+    return slice(slice_min, slice_max)
 
 
-@nb.njit
-def unique(srt_array: np.ndarray) -> np.ndarray:
-    """Get the unique values of a sorted numpy array.
-
-    Parameters
-    ----------
-    srt_array : numpy.ndarray
-        A sorted 1D numpy array.
-
-    Returns
-    -------
-    numpy.ndarray
-    """
-    vals = []
-    for val in srt_array:
-        if not vals:
-            vals.append(val)
-            continue
-
-        if val == vals[-1]:
-            continue
-
-        vals.append(val)
-
-    return np.array(vals)
+def is_sorted(a: NDArray) -> bool:
+    """Checks if an array is sorted."""
+    return np.all(a[:-1] <= a[1:])
