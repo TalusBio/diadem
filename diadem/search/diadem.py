@@ -124,9 +124,11 @@ def search_group(group: ScanGroup, db: IndexedDb, config: DiademConfig) -> DataF
             scores["id"] = match_id
             ref_peak_mz = new_stack.mzs[new_stack.ref_index]
 
-            # This can be faster
+            mzs = itertools.chain(
+                *[scores[x].iloc[0] for x in scores.columns if "_mzs" in x]
+            )
             best_match_mzs = np.sort(
-                np.array(tuple(itertools.chain(scores.mzs[0], [ref_peak_mz])))
+                np.array(tuple(itertools.chain(mzs, [ref_peak_mz])))
             )
 
             # Scale based on the inverse of the reference chromatogram
@@ -243,12 +245,12 @@ def diadem_main(
     results = []
 
     # This is a very easy point of parallelism
-    for group in ss.yield_iso_window_groups():
+    for group in ss.yield_iso_window_groups(progress=True):
         group_db = db.prefilter_ms1(group.precursor_range)
         group_results = search_group(group=group, db=group_db, config=config)
         results.append(group_results)
 
-    results = pd.concat(results)
+    results = pd.concat(results, ignore_index=True)
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)

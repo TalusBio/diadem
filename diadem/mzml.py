@@ -518,7 +518,14 @@ class SpectrumStacker:
         """Yield scan groups for each unique isolation window."""
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
 
-        for iso_window, chunk in tqdm(grouped, disable=not progress):
+        for i, (iso_window, chunk) in enumerate(
+            tqdm(grouped, disable=not progress, desc="Unique Isolation Windows")
+        ):
+            # Leaving here during early development and benchmarking
+            # TODO delete this
+            # if i > 3:
+            #     logger.error("Stopping after 3 scan windows, this is a debug run")
+            #     break
             iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
             logger.debug(f"Processing iso window {iso_window_name}")
 
@@ -529,7 +536,9 @@ class SpectrumStacker:
             window_rtinsecs = []
             window_scanids = []
 
-            for row in tqdm(chunk.itertuples()):
+            for row in tqdm(
+                chunk.itertuples(), desc=f"Preprocessing spectra for {iso_window_name}"
+            ):
                 spec_id = row.spec_id
                 curr_spec: Spectrum = self.adapter[spec_id]
                 # NOTE instrument seems to have a wrong value ...

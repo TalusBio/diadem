@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from argparse import Namespace
 from dataclasses import asdict, dataclass, field
@@ -101,8 +102,8 @@ class DiademConfig:  # noqa
         for k, v in asdict(self).items():
             logger.log(level, f"{k}: {v}")
 
-    def to_toml(self, path: str) -> None:
-        """Writes the config to a toml file."""
+    def toml_dict(self) -> dict[str : int | float | str]:
+        """Returns a dictionar with nones replaced for toml-friendly strings."""
         out = {}
         for k, v in asdict(self).items():
             if isinstance(v, tuple):
@@ -110,6 +111,11 @@ class DiademConfig:  # noqa
             elif v is None:
                 v = "__NONE__"
             out[k] = v
+        return out
+
+    def to_toml(self, path: str) -> None:
+        """Writes the config to a toml file."""
+        out = self.toml_dict()
         with open(path, "wb") as f:
             tomli_w.dump(out, f)
 
@@ -138,3 +144,21 @@ class DiademConfig:  # noqa
         file.
         """
         return cls.from_toml(args.config)
+
+    def hash(self) -> str:
+        """Hashes the config in a reproducible manner.
+
+        Notes
+        -----
+        Python adds a seed to the hash, therefore the has will be different
+
+        Example
+        -------
+        >>> DiademConfig().hash()
+        'dde6e4509afa935d8f81c3793e78e6c8'
+        >>> DiademConfig(ion_series = "y").hash()
+        'b2a08d947cbf36f912ffec21c3d22302'
+        """
+        h = hashlib.md5()
+        h.update(tomli_w.dumps(self.toml_dict()).encode())
+        return h.hexdigest()

@@ -515,6 +515,7 @@ class IndexedDb:
             )
             del frag_mzs, seq_ids, frag_series
 
+        logger.info("Done sorting (and GC), generating bucketlists")
         self.bucketlist = FragmentBucketList.from_arrays(
             fragment_mzs=sorted_frags,
             fragment_series=sorted_frag_series,
@@ -686,8 +687,8 @@ class IndexedDb:
         scores["Score"] = (
             scores["log_factorial_peak_sum"] + scores["log_intensity_sums"]
         )
-        scores = scores.sort_values("Score", ascending=False)
-        scores = scores[0:top_n].copy().reset_index()
+        scores = scores.nlargest(top_n, "Score", keep="all")
+        scores.sort_values("Score", ascending=False, inplace=True)
         scores["rank"] = [i + 1 for i in range(len(scores))]
         scores["Peptide"] = self.seqs[scores["id"].values]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
@@ -702,14 +703,17 @@ def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> In
     It internally checks the existance of a cache in the form of an sqlite file.
     Future implementations will allow cahching in the form of parquet.
     """
-    config_hash = str(abs(hash(config)))
+    config_hash = config.hash()
     file_cache = file_cache_dir(file=fasta)
     curr_cache = file_cache / config_hash
 
     db = IndexedDb(chunksize=chunksize, config=config)
     if not curr_cache.exists():
+        logger.info(f"Unable to find cache location {curr_cache}, will generate it.")
         curr_cache.mkdir(parents=True)
         db.targets_from_fasta(fasta)
         db.generate_to_parquet(dir=curr_cache)
+    else:
+        logger.info(f"Found cache location at: {curr_cache}, will use those values.")
     db.index_from_parquet(dir=curr_cache)
     return db

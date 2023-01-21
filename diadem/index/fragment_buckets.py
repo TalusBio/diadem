@@ -272,7 +272,9 @@ class FragmentBucketList:
         if not is_sorted(fragment_mzs):
             raise ValueError("fragment_mzs must be sorted")
         buckets = []
-        for i in range(0, len(fragment_mzs), chunksize):
+
+        vals = list(range(0, len(fragment_mzs), chunksize))
+        for i in tqdm(vals, desc="Fragment Buckets"):
             buckets.append(
                 FragmentBucket(
                     fragment_mzs=fragment_mzs[i : i + chunksize],
