@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import uniplot
+from joblib import Parallel, delayed
 from loguru import logger
 from pandas import DataFrame
 from tqdm.auto import tqdm
@@ -27,7 +28,9 @@ def plot_to_log(*args, **kwargs) -> None:  # noqa
 
 
 # @profile
-def search_group(group: ScanGroup, db: IndexedDb, config: DiademConfig) -> DataFrame:
+def search_group(
+    group: ScanGroup, db: IndexedDb, config: DiademConfig, progress: bool = True
+) -> DataFrame:
     """Search a group of scans.
 
     This function takes a scan group (all scans in a file that share
@@ -66,7 +69,7 @@ def search_group(group: ScanGroup, db: IndexedDb, config: DiademConfig) -> DataF
     curr_highest_peak_int = 2**30
     last_id = None
 
-    pbar = tqdm(desc=f"Slice: {group.iso_window_name}")
+    pbar = tqdm(desc=f"Slice: {group.iso_window_name}", disable=not progress)
 
     while True:
         if not (curr_highest_peak_int >= MIN_PEAK_INTENSITY and num_peaks <= MAX_PEAKS):
@@ -245,10 +248,18 @@ def diadem_main(
     results = []
 
     # This is a very easy point of parallelism
-    for group in ss.yield_iso_window_groups(progress=True):
-        group_db = db.prefilter_ms1(group.precursor_range)
-        group_results = search_group(group=group, db=group_db, config=config)
-        results.append(group_results)
+    if False:
+        for group in ss.yield_iso_window_groups(progress=True):
+            group_db = db.prefilter_ms1(group.precursor_range)
+            group_results = search_group(group=group, db=group_db, config=config)
+            results.append(group_results)
+    else:
+        results = Parallel(n_jobs=4)(
+            delayed(search_group)(
+                group=group, db=db.prefilter_ms1(group.precursor_range), config=config
+            )
+            for group in ss.yield_iso_window_groups(progress=True)
+        )
 
     results = pd.concat(results, ignore_index=True)
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"

@@ -29,6 +29,7 @@ dependencies = [
     "fastparquet >= 2022.11.0",
     "pyarrow >= 10.0.1",
     "platformdirs >= 2.6.0",
+    "joblib >= 1.2.0",
     # Deisotoping
     "brain-isotopic-distribution >= 1.5.11",
     "ms-peak-picker >= 0.1.40",

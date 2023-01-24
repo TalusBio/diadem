@@ -523,10 +523,13 @@ class SpectrumStacker:
         ):
             # Leaving here during early development and benchmarking
             # TODO delete this
-            # if i > 3:
-            #     logger.error("Stopping after 3 scan windows, this is a debug run")
-            #     break
             iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
+            if iso_window[0] < 700 or iso_window[0] > 750:
+                logger.error(
+                    f"Skipping scans {iso_window_name} not in in the 700-750 range for"
+                    " a debug run!"
+                )
+                continue
             logger.debug(f"Processing iso window {iso_window_name}")
 
             window_mzs = []
