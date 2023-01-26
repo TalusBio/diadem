@@ -33,7 +33,7 @@ dependencies = [
     # Deisotoping
     "brain-isotopic-distribution >= 1.5.11",
     "ms-peak-picker >= 0.1.40",
-    "ms-deisotope >= 0.0.44",
+    "ms-deisotope >= 0.0.46",
 ]
 dynamic = ["version"]
 
@@ -52,6 +52,9 @@ test = [
     "pytest-cov >= 4.0.0",
 ]
 
+
+[tool.setuptools.packages.find]
+include = ["diadem"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

@@ -1,11 +1,13 @@
 import pandas as pd
+import pytest
 from ms2ml import Peptide
 
 from diadem.config import DiademConfig
 from diadem.search.diadem import diadem_main
 
 
-def test_dia_search_works(tmpdir, shared_datadir):
+@pytest.mark.parametrize("parallel", [True, False], ids=["Parallel", "NoParallel"])
+def test_dia_search_works(tmpdir, shared_datadir, parallel):
     """Uses simulated data to test diadem.
 
     Uses data simulated using Synthedia to check if the full search
@@ -13,7 +15,7 @@ def test_dia_search_works(tmpdir, shared_datadir):
     """
     fasta = shared_datadir / "mzml/P11362.fasta"
     mzml = shared_datadir / "mzml/FGFR1_600_800_5min_group_0_sample_0.mzML"
-    config = DiademConfig()
+    config = DiademConfig(run_parallelism=2 if parallel else -1)
     out = str(tmpdir / "out")
     diadem_main(config=config, mzml_path=mzml, fasta_path=fasta, out_prefix=out)
 

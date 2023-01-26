@@ -64,9 +64,12 @@ class DiademConfig:  # noqa
 
     # the 5k number comes from the neviskii lab paper on deisotoping
     run_max_peaks_per_spec: int = 5_000
+
+    # Prallelism 1 means no parallelism, -1 means all cores, any other positive
+    # integer means use that many cores.
+    run_parallelism: int = -2
     run_deconvolute_spectra: bool = True
     run_min_peak_intensity: float = 100
-    # run_debug_log_frequency: int = 200
     run_debug_log_frequency: int = 20
     run_allowed_fails: int = 50
     run_window_size: int = 21
@@ -155,9 +158,9 @@ class DiademConfig:  # noqa
         Example
         -------
         >>> DiademConfig().hash()
-        'dde6e4509afa935d8f81c3793e78e6c8'
+        'da79fc179aea9e8e3ade2d6b14806a5f'
         >>> DiademConfig(ion_series = "y").hash()
-        'b2a08d947cbf36f912ffec21c3d22302'
+        '5b2be7fb78ef662ba93af6cb3b6a60dc'
         """
         h = hashlib.md5()
         h.update(tomli_w.dumps(self.toml_dict()).encode())

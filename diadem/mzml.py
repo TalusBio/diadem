@@ -6,12 +6,14 @@ from typing import Iterable, Iterator
 
 import ms_deisotope
 import numpy as np
+from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml import Config, Spectrum
 from ms2ml.data.adapters import MZMLAdapter
 from ms2ml.utils.mz_utils import annotate_peaks
 from ms_deisotope.deconvolution.utils import prepare_peaklist
 from numpy.typing import NDArray
+from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import MassError
@@ -514,6 +516,122 @@ class SpectrumStacker:
         self.ms2info = scaninfo[scaninfo.ms_level > 1].copy().reset_index()
         self.unique_iso_windows = set(np.array(self.ms2info.iso_window))
 
+    def _get_iso_window_group(
+        self, iso_window_name: str, iso_window: tuple[float, float], chunk: DataFrame
+    ) -> ScanGroup:
+        logger.debug(f"Processing iso window {iso_window_name}")
+
+        window_mzs = []
+        window_ints = []
+        window_bp_mz = []
+        window_bp_int = []
+        window_rtinsecs = []
+        window_scanids = []
+
+        for row in tqdm(
+            chunk.itertuples(), desc=f"Preprocessing spectra for {iso_window_name}"
+        ):
+            spec_id = row.spec_id
+            curr_spec: Spectrum = self.adapter[spec_id]
+            # NOTE instrument seems to have a wrong value ...
+            # Also activation seems to not be recorded ...
+            curr_spec = curr_spec.filter_top(self.config.run_max_peaks_per_spec)
+
+            # Deisotoping!
+            if self.config.run_deconvolute_spectra:
+                peaks = prepare_peaklist((curr_spec.mz, curr_spec.intensity))
+                deconvoluted_peaks, _ = ms_deisotope.deconvolute_peaks(
+                    peaks,
+                    averagine=ms_deisotope.peptide,
+                    scorer=ms_deisotope.MSDeconVFitter(0),
+                    retention_strategy=ms_deisotope.deconvolution.TopNRetentionStrategy(
+                        50, max_mass=2000
+                    ),
+                    charge_range=(1, 3),
+                )
+
+                # For scorer discussion please refer to
+                # check https://mobiusklein.github.io/ms_deisotope/docs/_build/html/deconvolution/envelope_scoring.html#ms_deisotope.scoring.IsotopicFitterBase
+
+                mzs = np.array([x.mz for x in deconvoluted_peaks])
+                intensities = np.array([x.intensity for x in deconvoluted_peaks])
+            else:
+                mzs = curr_spec.mz
+                intensities = curr_spec.intensity
+            # TODO evaluate this scaling
+            intensities = np.sqrt(intensities)
+            if len(mzs) == 0:
+                mzs, intensities = np.array([0]), np.array([0])
+            bp_index = np.argmax(intensities)
+            bp_mz = mzs[bp_index]
+            bp_int = intensities[bp_index]
+            rtinsecs = curr_spec.retention_time.seconds()
+
+            window_mzs.append(mzs)
+            window_ints.append(intensities)
+            window_bp_mz.append(bp_mz)
+            window_bp_int.append(bp_int)
+            window_rtinsecs.append(rtinsecs)
+            window_scanids.append(spec_id)
+
+        # Create datasets within each group
+        logger.info(f"Saving group {iso_window_name} with length {len(window_mzs)}")
+
+        window_bp_mz = np.array(window_bp_mz).astype(np.float32)
+        window_bp_int = np.array(window_bp_int).astype(np.float32)
+        window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
+        window_scanids = np.array(window_scanids, dtype="object")
+
+        group = ScanGroup(
+            iso_window_name=iso_window_name,
+            precursor_range=iso_window,
+            mzs=window_mzs,
+            intensities=window_ints,
+            base_peak_mz=window_bp_mz,
+            base_peak_int=window_bp_int,
+            retention_times=window_rtinsecs,
+            scan_ids=window_scanids,
+        )
+        return group
+
+    def get_iso_window_groups(
+        self, workerpool: None | Parallel = None
+    ) -> list[ScanGroup]:
+        """Returns a list of all ScanGroups in an mzML file."""
+        grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
+        iso_windows, chunks = zip(*list(grouped))
+
+        # logger.error(
+        #     "Sebastian has not removed this from the code! do not let this go though!"
+        # )
+        # iso_windows, chunks = zip(
+        #     *[
+        #         (iso_window, chunk)
+        #         for iso_window, chunk in zip(iso_windows, chunks)
+        #         if iso_window[0] > 400 and iso_window[0] < 420
+        #     ]
+        # )
+        iso_window_names = [
+            "({:.06f}, {:.06f})".format(*iso_window) for iso_window in iso_windows
+        ]
+
+        if workerpool is None:
+            results = [
+                self._get_iso_window_group(
+                    iso_window_name=iwn, iso_window=iw, chunk=chunk
+                )
+                for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
+            ]
+        else:
+            results = workerpool(
+                delayed(self._get_iso_window_group)(
+                    iso_window_name=iwn, iso_window=iw, chunk=chunk
+                )
+                for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
+            )
+
+        return results
+
     def yield_iso_window_groups(self, progress: bool = False) -> Iterator[ScanGroup]:
         """Yield scan groups for each unique isolation window."""
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
@@ -530,79 +648,8 @@ class SpectrumStacker:
                     " a debug run!"
                 )
                 continue
-            logger.debug(f"Processing iso window {iso_window_name}")
 
-            window_mzs = []
-            window_ints = []
-            window_bp_mz = []
-            window_bp_int = []
-            window_rtinsecs = []
-            window_scanids = []
-
-            for row in tqdm(
-                chunk.itertuples(), desc=f"Preprocessing spectra for {iso_window_name}"
-            ):
-                spec_id = row.spec_id
-                curr_spec: Spectrum = self.adapter[spec_id]
-                # NOTE instrument seems to have a wrong value ...
-                # Also activation seems to not be recorded ...
-                curr_spec = curr_spec.filter_top(self.config.run_max_peaks_per_spec)
-
-                # Deisotoping!
-                if self.config.run_deconvolute_spectra:
-                    peaks = prepare_peaklist(
-                        [
-                            (mz, inten)
-                            for mz, inten in zip(curr_spec.mz, curr_spec.intensity)
-                        ]
-                    )
-                    deconvoluted_peaks, _ = ms_deisotope.deconvolute_peaks(
-                        peaks,
-                        averagine=ms_deisotope.peptide,
-                        scorer=ms_deisotope.MSDeconVFitter(10.0),
-                        charge_range=(1, 3),
-                    )
-                    # I do not really have a reason to use one scorer over other rn
-                    # check https://mobiusklein.github.io/ms_deisotope/docs/_build/html/deconvolution/envelope_scoring.html#ms_deisotope.scoring.IsotopicFitterBase
-
-                    mzs = np.array([x.mz for x in deconvoluted_peaks])
-                    intensities = np.array([x.intensity for x in deconvoluted_peaks])
-                else:
-                    mzs = curr_spec.mz
-                    intensities = curr_spec.intensity
-                # TODO evaluate this scaling
-                intensities = np.sqrt(intensities)
-                if len(mzs) == 0:
-                    mzs, intensities = np.array([0]), np.array([0])
-                bp_index = np.argmax(intensities)
-                bp_mz = mzs[bp_index]
-                bp_int = intensities[bp_index]
-                rtinsecs = curr_spec.retention_time.seconds()
-
-                window_mzs.append(mzs)
-                window_ints.append(intensities)
-                window_bp_mz.append(bp_mz)
-                window_bp_int.append(bp_int)
-                window_rtinsecs.append(rtinsecs)
-                window_scanids.append(spec_id)
-
-            # Create datasets within each group
-            logger.info(f"Saving group {str(iso_window)} with length {len(window_mzs)}")
-            # window_mzs = [] are kept as is because it is a ragge array
-
-            window_bp_mz = np.array(window_bp_mz).astype(np.float32)
-            window_bp_int = np.array(window_bp_int).astype(np.float32)
-            window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
-            window_scanids = np.array(window_scanids, dtype="object")
-
-            group = ScanGroup(
-                iso_window_name=iso_window_name,
-                precursor_range=iso_window,
-                mzs=window_mzs,
-                intensities=window_ints,
-                base_peak_mz=window_bp_mz,
-                base_peak_int=window_bp_int,
-                retention_times=window_rtinsecs,
-                scan_ids=window_scanids,
+            group = self._get_iso_window_group(
+                iso_window_name=iso_window_name, iso_window=iso_window, chunk=chunk
             )
             yield group

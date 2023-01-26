@@ -708,9 +708,9 @@ def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> In
     curr_cache = file_cache / config_hash
 
     db = IndexedDb(chunksize=chunksize, config=config)
-    if not curr_cache.exists():
+    if not curr_cache.exists() or not (curr_cache / "seqs.parquet").exists():
         logger.info(f"Unable to find cache location {curr_cache}, will generate it.")
-        curr_cache.mkdir(parents=True)
+        curr_cache.mkdir(parents=True, exist_ok=True)
         db.targets_from_fasta(fasta)
         db.generate_to_parquet(dir=curr_cache)
     else:

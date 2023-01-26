@@ -248,18 +248,20 @@ def diadem_main(
     results = []
 
     # This is a very easy point of parallelism
-    if False:
+    if config.run_parallelism == 1:
         for group in ss.yield_iso_window_groups(progress=True):
             group_db = db.prefilter_ms1(group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
             results.append(group_results)
     else:
-        results = Parallel(n_jobs=4)(
-            delayed(search_group)(
-                group=group, db=db.prefilter_ms1(group.precursor_range), config=config
+        # with Parallel(n_jobs=config.run_parallelism) as workerpool:
+        with Parallel(n_jobs=4) as workerpool:
+            groups = ss.get_iso_window_groups(workerpool=workerpool)
+            dbs = [db.prefilter_ms1(group.precursor_range) for group in groups]
+            results = workerpool(
+                delayed(search_group)(group=group, db=pfdb, config=config)
+                for group, pfdb in zip(groups, dbs)
             )
-            for group in ss.yield_iso_window_groups(progress=True)
-        )
 
     results = pd.concat(results, ignore_index=True)
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
