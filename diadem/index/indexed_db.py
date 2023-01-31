@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from pathlib import Path
 from typing import Iterable, Iterator, TypedDict
 
@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from fastparquet import write as write_parquet
 from loguru import logger
-from ms2ml import Peptide
+from ms2ml import Config, Peptide
 from ms2ml.data.adapters import FastaAdapter
 from ms2ml.utils.mz_utils import get_tolerance, sort_all
 from numpy.typing import NDArray
@@ -48,16 +48,6 @@ class PeptidePartialScoring(TypedDict):
     mzs: list[float]
 
 
-def get_empty_score() -> PeptidePartialScoring:
-    """Sets up an empty partial score and initializes the values."""
-    x: PeptidePartialScoring = {
-        "intensities": 0.0,
-        "npeaks": 0,
-        "mzs": [],
-    }
-    return x
-
-
 SeqProperties = namedtuple(
     "SeqProperties", "fragments, ion_series, prec_mz, proforma_seq, num_frags"
 )
@@ -87,7 +77,14 @@ class PeptideScore:
         """  # noqa
         self.id: int = id
         self.ions = ions
-        self.partial_scores = {i: get_empty_score() for i in ions}
+        self.partial_scores = {
+            i: {
+                "intensities": 0.0,
+                "npeaks": 0,
+                "mzs": [],
+            }
+            for i in ions
+        }
         self.tot_peaks = 0
 
     def add_peak(self, ion: str, mz: float, intensity: float) -> None:
@@ -176,6 +173,13 @@ class IndexedDb:
         # CHUNKSIZE = 32 # sage uses 32768 for real world stuff
 
     @property
+    def ms2ml_config(self) -> Config:
+        """Extracts an ms2ml config from the internal diadem config"""
+        if not hasattr(self, "_ms2ml_config"):
+            self._ms2ml_config = self.config.ms2ml_config
+        return self._ms2ml_config
+
+    @property
     def targets(self) -> list[Peptide]:
         """Returns a list of peptide objects for the targets in the database."""
         if hasattr(self, "_targets") and self._targets is not None:
@@ -193,7 +197,7 @@ class IndexedDb:
             A list of peptide objects to set as the targets for the database.
         """
         for x in value:
-            x.config = self.config.ms2ml_config
+            x.config = self.ms2ml_config
         self._targets = value
         self._decoys = None
         self.target_proforma = {x.to_proforma() for x in value}
@@ -253,7 +257,9 @@ class IndexedDb:
         sequences = list(adapter.parse())
         self.targets = sequences
 
-    def prefilter_ms1(self, ms1_range: tuple[float, float]) -> IndexedDb:
+    def prefilter_ms1(
+        self, ms1_range: tuple[float, float], num_decimals=3
+    ) -> IndexedDb:
         """Prefilters the database.
 
         The filtered database will include peptides fragments a given
@@ -274,7 +280,9 @@ class IndexedDb:
         logger.info(f"Filtering ms1 ranges in database {self.name}")
         out = copy.copy(self)
 
-        out.bucketlist = self.bucketlist.prefilter_ms1(*ms1_range)
+        out.bucketlist = self.bucketlist.prefilter_ms1(
+            *ms1_range, num_decimals=num_decimals
+        )
         out.prefiltered_ms1 = True
         out.seq_prec_mzs = self.seq_prec_mzs
         out.seqs = self.seqs
@@ -611,7 +619,7 @@ class IndexedDb:
             )
             ms1_range = (precursor_mz - ms1_tol, precursor_mz + ms1_tol)
 
-        scores = defaultdict(PeptideScore)
+        scores = {}
         comparissons = 0
 
         for fragment_mz, fragment_intensity in zip(spec_mz, spec_int):
@@ -630,13 +638,15 @@ class IndexedDb:
                 # Should tolerances be checked here?
                 dm = frag - fragment_mz
                 if abs(dm) <= ms2_tol:
-                    if seq not in scores:
-                        scores[seq] = PeptideScore(
+                    try:
+                        scores[seq].add_peak(series, fragment_mz, fragment_intensity)
+                    except KeyError:
+                        tmp = PeptideScore(
                             seq,
                             self.config.ion_series,
                         )
-
-                    scores[seq].add_peak(series, fragment_mz, fragment_intensity)
+                        tmp.add_peak(series, fragment_mz, fragment_intensity)
+                        scores[seq] = tmp
                 comparissons += 1
 
         scores = {k: v for k, v in scores.items() if v.tot_peaks >= MIN_PEAKS}

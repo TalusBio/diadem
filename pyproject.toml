@@ -10,7 +10,7 @@ authors = [
     {name = "Carollyn Allen", email = "callen@talus.bio"},
 ]
 description = "A modular, feature-centric toolkit for DIA proteomics"
-requires-python = ">=3.9,<=3.11"
+requires-python = ">=3.9,<=3.12"
 keywords = ["proteomics", "dia", "mass spec"]
 license = {text = "Apache 2.0"}
 classifiers = [
@@ -22,7 +22,8 @@ classifiers = [
 dependencies = [
     "pandas >= 1.5.2",
     "numpy >= 1.23.5",
-    "ms2ml >= 0.0.33",
+    # "ms2ml >= 0.0.33",
+    "ms2ml >= 0.0.31",
     "tqdm >= 4.64.1",
     "loguru >= 0.6.0",
     "rich-click >= 1.6.0",
@@ -50,6 +51,9 @@ test = [
     "pytest >= 7.2.0",
     "pytest-datadir >= 1.4.1",
     "pytest-cov >= 4.0.0",
+]
+profiling = [
+    "line_profiler",
 ]
 
 

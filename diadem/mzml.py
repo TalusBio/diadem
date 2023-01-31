@@ -601,16 +601,16 @@ class SpectrumStacker:
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
         iso_windows, chunks = zip(*list(grouped))
 
-        # logger.error(
-        #     "Sebastian has not removed this from the code! do not let this go though!"
-        # )
-        # iso_windows, chunks = zip(
-        #     *[
-        #         (iso_window, chunk)
-        #         for iso_window, chunk in zip(iso_windows, chunks)
-        #         if iso_window[0] > 400 and iso_window[0] < 420
-        #     ]
-        # )
+        logger.error(
+            "Sebastian has not removed this from the code! do not let this go though!"
+        )
+        iso_windows, chunks = zip(
+            *[
+                (iso_window, chunk)
+                for iso_window, chunk in zip(iso_windows, chunks)
+                if iso_window[0] > 700 and iso_window[0] < 705
+            ]
+        )
         iso_window_names = [
             "({:.06f}, {:.06f})".format(*iso_window) for iso_window in iso_windows
         ]
@@ -642,7 +642,8 @@ class SpectrumStacker:
             # Leaving here during early development and benchmarking
             # TODO delete this
             iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
-            if iso_window[0] < 700 or iso_window[0] > 750:
+            logger.error("Sebastian Has not removed this, dont let it go though!")
+            if iso_window[0] < 700 or iso_window[0] > 705:
                 logger.error(
                     f"Skipping scans {iso_window_name} not in in the 700-750 range for"
                     " a debug run!"

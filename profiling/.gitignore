@@ -1,3 +1,6 @@
 
 diadem.csv
 diadem.parquet
+profiling_data/*
+line_profile*.txt
+profile*.txt

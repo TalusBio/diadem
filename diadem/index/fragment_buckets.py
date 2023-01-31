@@ -440,13 +440,13 @@ class PrefilteredMS1BucketList:
         # Note: the ms1 range argument is not used here but kept
         # to maintain the same interface as the non-prefiltered database.
         min_mz, max_mz = ms2_range
-        last_mz = 0
+        # last_mz = 0
         for x in self.yield_buckets_matching_ms2(min_mz, max_mz):
             for sid, fragmz, fragseries in zip(
                 x.precursor_ids, x.fragment_mzs, x.fragment_series
             ):
                 if fragmz > max_mz:
                     break
-                assert fragmz >= last_mz, "Fragment mzs not sorted"
-                last_mz = fragmz
+                # assert fragmz >= last_mz, "Fragment mzs not sorted"
+                # last_mz = fragmz
                 yield sid, fragmz, fragseries
