@@ -174,7 +174,7 @@ class IndexedDb:
 
     @property
     def ms2ml_config(self) -> Config:
-        """Extracts an ms2ml config from the internal diadem config"""
+        """Extracts an ms2ml config from the internal diadem config."""
         if not hasattr(self, "_ms2ml_config"):
             self._ms2ml_config = self.config.ms2ml_config
         return self._ms2ml_config
@@ -258,7 +258,7 @@ class IndexedDb:
         self.targets = sequences
 
     def prefilter_ms1(
-        self, ms1_range: tuple[float, float], num_decimals=3
+        self, ms1_range: tuple[float, float], num_decimals: int = 3
     ) -> IndexedDb:
         """Prefilters the database.
 
@@ -269,6 +269,10 @@ class IndexedDb:
         ----------
         ms1_range : tuple[float, float]
             The MS1 range to filter the database to.
+        num_decimals : int
+            The number of decimal places that the fragments will be rounded to.
+            This is used for indexing purposes (smaller number = coarser index)
+            but not for scoring.
 
 
         Returns

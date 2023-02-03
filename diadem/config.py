@@ -158,9 +158,9 @@ class DiademConfig:  # noqa
         Example
         -------
         >>> DiademConfig().hash()
-        'da79fc179aea9e8e3ade2d6b14806a5f'
+        '1c28dc87384f18fa1e4906a6cedadc92'
         >>> DiademConfig(ion_series = "y").hash()
-        '5b2be7fb78ef662ba93af6cb3b6a60dc'
+        'c0332cac701f6f8a7df4afc7330450ee'
         """
         h = hashlib.md5()
         h.update(tomli_w.dumps(self.toml_dict()).encode())

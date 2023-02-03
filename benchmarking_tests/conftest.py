@@ -30,17 +30,20 @@ aa_counts = {
 }
 
 
-def make_protein(prot_length):
+def make_protein(prot_length: int) -> str:
+    """Makes the sequence of a fake protein of the passed length."""
     return "".join(
         sample(list(aa_counts.keys()), counts=list(aa_counts.values()), k=prot_length)
     )
 
 
 def make_fakename():
+    """Makes a fake fasta header with a random name."""
     return ">" + "".join(choices(list(aa_counts), k=25))
 
 
 def make_fasta(outfile, n=5_000):
+    """Makes a fake fasta file with n number of proteins."""
     random.seed(42)
     np.random.seed(42)
     with open(outfile, "w", encoding="utf-8") as f:
@@ -52,6 +55,7 @@ def make_fasta(outfile, n=5_000):
 
 
 def fake_spectra_tuple(rng: np.random.Generator, npeaks):
+    """Makes random arrays that mimic spectra."""
     mzs = rng.uniform(150, 1900, size=npeaks)
     precursor_mz = rng.uniform(150, 1900, size=1)
     ints = rng.exponential(scale=10_000, size=npeaks)
@@ -61,6 +65,7 @@ def fake_spectra_tuple(rng: np.random.Generator, npeaks):
 
 @pytest.fixture
 def fake_spectra_tuples_100():
+    """Fixture that generate 100 fake spectra for testing."""
     random.seed(42)
     np.random.seed(42)
     rng = np.random.default_rng(42)
@@ -70,6 +75,7 @@ def fake_spectra_tuples_100():
 
 @pytest.fixture
 def fake_5k_fasta(tmpdir):
+    """Fixture that generates a fasta file with 5k fake proteins."""
     fasta_location = tmpdir / "myfakefasta.fasta"
     make_fasta(outfile=fasta_location, n=5000)
     return fasta_location
