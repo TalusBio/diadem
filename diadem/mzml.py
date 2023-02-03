@@ -601,6 +601,7 @@ class SpectrumStacker:
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
         iso_windows, chunks = zip(*list(grouped))
 
+        """
         logger.error(
             "Sebastian has not removed this from the code! do not let this go though!"
         )
@@ -611,6 +612,7 @@ class SpectrumStacker:
                 if iso_window[0] > 700 and iso_window[0] < 705
             ]
         )
+        """
         iso_window_names = [
             "({:.06f}, {:.06f})".format(*iso_window) for iso_window in iso_windows
         ]
