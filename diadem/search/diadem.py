@@ -15,6 +15,7 @@ from tqdm.auto import tqdm
 from diadem.config import DiademConfig
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.mzml import ScanGroup, SpectrumStacker, StackedChromatograms
+from diadem.search.search_utils import make_pin
 
 
 def plot_to_log(*args, **kwargs) -> None:  # noqa
@@ -88,6 +89,7 @@ def search_group(
             min_correlation=MIN_CORR_SCORE,
             tolerance=MS2_TOLERANCE,
             tolerance_unit=MS2_TOLERANCE_UNIT,
+            max_peaks=MAX_PEAKS,
         )
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
@@ -160,6 +162,9 @@ def search_group(
                     window=WINDOWSIZE,
                     tolerance=db.config.g_tolerances[1],
                     tolerance_unit=db.config.g_tolerance_units[1],
+                    min_intensity_ratio=MIN_INTENSITY_RATIO,
+                    min_correlation=MIN_CORR_SCORE,
+                    max_peaks=MAX_PEAKS,
                 )
                 plot_to_log(
                     [before, s.ref_trace],
@@ -247,15 +252,14 @@ def diadem_main(
 
     results = []
 
-    # This is a very easy point of parallelism
     if config.run_parallelism == 1:
         for group in ss.yield_iso_window_groups(progress=True):
             group_db = db.prefilter_ms1(group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
             results.append(group_results)
     else:
-        # with Parallel(n_jobs=config.run_parallelism) as workerpool:
-        with Parallel(n_jobs=4) as workerpool:
+        with Parallel(n_jobs=config.run_parallelism) as workerpool:
+            # with Parallel(n_jobs=4) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
             dbs = [db.prefilter_ms1(group.precursor_range) for group in groups]
             results = workerpool(
@@ -263,11 +267,19 @@ def diadem_main(
                 for group, pfdb in zip(groups, dbs)
             )
 
-    results = pd.concat(results, ignore_index=True)
+    results: pd.DataFrame = pd.concat(results, ignore_index=True)
+
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
     results.to_parquet(prefix + ".parquet", index=False, engine="pyarrow")
+    make_pin(
+        results,
+        fasta_path=fasta_path,
+        mzml_path=mzml_path,
+        pin_path=prefix + ".tsv.pin",
+    )
+
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Elapsed time: {elapsed_time}")

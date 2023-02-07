@@ -69,11 +69,13 @@ class PeptideScore:
         Examples
         --------
         >>> score = PeptideScore(1, "by")
-        >>> score.add_peak('y', mz = 234.22, intensity = 100)
-        >>> score.add_peak('y', mz = 534.22, intensity = 200)
+        >>> score.add_peak('y', mz = 234.22, intensity = 100, error = 0.01)
+        >>> score.add_peak('y', mz = 534.22, intensity = 200, error = 0.012)
         >>> outs = score.as_row_entry()
-        >>> [x for x in outs]
-        ['id', 'b_intensity', 'b_npeaks', 'b_mzs', 'y_intensity', 'y_npeaks', 'y_mzs', 'log_intensity_sums', 'log_factorial_peak_sum', 'mzs']
+        >>> [x for x in outs] # doctest: +NORMALIZE_WHITESPACE
+        ['id', 'b_intensity', 'b_npeaks', 'b_mzs', 'y_intensity', 'y_npeaks',\
+         'y_mzs', 'log_intensity_sums', 'log_factorial_peak_sum', 'mzs',\
+         'mass_errors', 'avg_abs_dm', 'med_abs_dm']
         """  # noqa
         self.id: int = id
         self.ions = ions
@@ -82,12 +84,13 @@ class PeptideScore:
                 "intensities": 0.0,
                 "npeaks": 0,
                 "mzs": [],
+                "mass_errors": [],
             }
             for i in ions
         }
         self.tot_peaks = 0
 
-    def add_peak(self, ion: str, mz: float, intensity: float) -> None:
+    def add_peak(self, ion: str, mz: float, intensity: float, error: float) -> None:
         """Adds a peak to the partial score.
 
         Check the class docstring for more details.
@@ -104,6 +107,7 @@ class PeptideScore:
         self.partial_scores[ion]["intensities"] += intensity
         self.partial_scores[ion]["npeaks"] += 1
         self.partial_scores[ion]["mzs"].append(mz)
+        self.partial_scores[ion]["mass_errors"].append(error)
         self.tot_peaks += 1
 
     def as_row_entry(self) -> dict[str, float | list[float] | int]:
@@ -118,6 +122,7 @@ class PeptideScore:
         logfact_peaks = 0
         logints = 0
         mzs = []
+        mass_errors = []
         for ion in self.ions:
             out[f"{ion}_intensity"] = self.partial_scores[ion]["intensities"]
             out[f"{ion}_npeaks"] = self.partial_scores[ion]["npeaks"]
@@ -125,12 +130,16 @@ class PeptideScore:
             logfact_peaks += LOG_FACTORIALS[self.partial_scores[ion]["npeaks"]]
             logints += np.log1p(self.partial_scores[ion]["intensities"])
             mzs.extend(self.partial_scores[ion]["mzs"])
+            mass_errors.extend(self.partial_scores[ion]["mass_errors"])
 
         out["log_intensity_sums"] = logints
         out["log_factorial_peak_sum"] = sum(
             self.partial_scores[ion]["npeaks"] for ion in self.ions
         )
         out["mzs"] = mzs
+        out["mass_errors"] = mass_errors
+        out["avg_abs_dm"] = np.abs(np.array(mass_errors)).mean()
+        out["med_abs_dm"] = np.median(np.abs(np.array(mass_errors)))
         return out
 
 
@@ -643,13 +652,15 @@ class IndexedDb:
                 dm = frag - fragment_mz
                 if abs(dm) <= ms2_tol:
                     try:
-                        scores[seq].add_peak(series, fragment_mz, fragment_intensity)
+                        scores[seq].add_peak(
+                            series, fragment_mz, fragment_intensity, dm
+                        )
                     except KeyError:
                         tmp = PeptideScore(
                             seq,
                             self.config.ion_series,
                         )
-                        tmp.add_peak(series, fragment_mz, fragment_intensity)
+                        tmp.add_peak(series, fragment_mz, fragment_intensity, dm)
                         scores[seq] = tmp
                 comparissons += 1
 

@@ -13,6 +13,7 @@ from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
+from diadem.search.search_utils import make_pin
 
 
 def score(db: IndexedDb, spec: Spectrum, mzml_stem: str) -> DataFrame | None:
@@ -85,6 +86,13 @@ def dda_main(
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
     results.to_parquet(prefix + ".parquet", index=False)
+    make_pin(
+        results,
+        fasta_path=fasta_path,
+        mzml_path=mzml_path,
+        pin_path=prefix + ".tsv.pin",
+    )
+
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Elapsed time: {elapsed_time}")

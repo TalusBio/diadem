@@ -11,7 +11,6 @@ from loguru import logger
 from ms2ml import Config, Spectrum
 from ms2ml.data.adapters import MZMLAdapter
 from ms2ml.utils.mz_utils import annotate_peaks
-from ms_deisotope.deconvolution.utils import prepare_peaklist
 from numpy.typing import NDArray
 from pandas import DataFrame
 from tqdm.auto import tqdm
@@ -80,6 +79,7 @@ class ScanGroup:
         tolerance: float,
         tolerance_unit: str,
         min_correlation: float,
+        max_peaks: int,
     ) -> StackedChromatograms:
         """Gets the highest intensity window of the chromatogram.
 
@@ -92,13 +92,14 @@ class ScanGroup:
         """
         top_index = np.argmax(self.base_peak_int)
         window = StackedChromatograms.from_group(
-            self,
-            top_index,
+            group=self,
+            index=top_index,
             window=window,
             min_intensity_ratio=min_intensity_ratio,
             min_correlation=min_correlation,
             tolerance=tolerance,
             tolerance_unit=tolerance_unit,
+            max_peaks=max_peaks,
         )
 
         return window
@@ -159,41 +160,6 @@ class ScanGroup:
     def __len__(self) -> int:
         """Returns the number of spectra in the group."""
         return len(self.intensities)
-
-    """
-    @staticmethod
-    def scale_matching_intensities(
-        mzs,
-        intensities,
-        reference_mzs,
-        scaling_factor,
-        tolerance: float,
-        tolerance_unit: MassError,
-    ):
-        # TODO optimize this
-        indices_1, indices_2 = annotate_peaks(
-            theo_mz=mzs,
-            mz=reference_mzs,
-            tolerance=tolerance,
-            unit=tolerance_unit,
-        )
-
-        indices_1 = np.unique(indices_1)
-
-        if len(indices_1) == 0:
-            return intensities, True
-
-        vals = intensities[indices_1]
-        # min_val = vals.min()
-        # max_val = vals.max()
-        # intensities[indices_1] = np.clip(
-        #     vals * scaling_factor, min_val, max_val * scaling_factor
-        # )
-        if (scaling_factor > 1) or (scaling_factor < 0):
-            raise ValueError("Scaling factor should be a number between 0 and 1")
-        intensities[indices_1] = vals * scaling_factor
-        return intensities, False
-    """
 
 
 # @profile
@@ -400,6 +366,7 @@ class StackedChromatograms:
         tolerance_unit: MassError = "da",
         min_intensity_ratio: float = 0.01,
         min_correlation: float = 0.5,
+        max_peaks: int = 150,
     ) -> StackedChromatograms:
         """Create a stacked chromatogram from a scan group.
 
@@ -462,7 +429,7 @@ class StackedChromatograms:
         stacked_arr = np.stack([x[0] for x in xic_outs], axis=-1)
         indices = [x[1] for x in xic_outs]
 
-        if min_correlation and stacked_arr.shape[-2] > 1:
+        if stacked_arr.shape[-2] > 1:
             ref_id = np.argmax(stacked_arr[..., center_index])
             corrs = get_ref_trace_corrs(arr=stacked_arr, ref_idx=ref_id)
 
@@ -472,7 +439,9 @@ class StackedChromatograms:
                 corrs[ref_id] + 1e-5
             ), "Reference does not have max corrr"
 
-            keep = corrs >= min_correlation
+            max_peak_corr = np.sort(corrs)[-max_peaks] if len(corrs) > max_peaks else -1
+            keep = corrs >= max(min_correlation, max_peak_corr)
+
             stacked_arr = stacked_arr[..., keep, ::1]
             center_mzs = center_mzs[keep]
             center_intensities = center_intensities[keep]
@@ -539,9 +508,8 @@ class SpectrumStacker:
 
             # Deisotoping!
             if self.config.run_deconvolute_spectra:
-                peaks = prepare_peaklist((curr_spec.mz, curr_spec.intensity))
                 deconvoluted_peaks, _ = ms_deisotope.deconvolute_peaks(
-                    peaks,
+                    (curr_spec.mz, curr_spec.intensity),
                     averagine=ms_deisotope.peptide,
                     scorer=ms_deisotope.MSDeconVFitter(0),
                     retention_strategy=ms_deisotope.deconvolution.TopNRetentionStrategy(

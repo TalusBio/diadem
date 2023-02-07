@@ -15,7 +15,7 @@ def test_dia_search_works(tmpdir, shared_datadir, parallel):
     """
     fasta = shared_datadir / "mzml/P11362.fasta"
     mzml = shared_datadir / "mzml/FGFR1_600_800_5min_group_0_sample_0.mzML"
-    config = DiademConfig(run_parallelism=2 if parallel else -1)
+    config = DiademConfig(run_parallelism=2 if parallel else 1)
     out = str(tmpdir / "out")
     diadem_main(config=config, mzml_path=mzml, fasta_path=fasta, out_prefix=out)
 
