@@ -5,6 +5,8 @@ from os import PathLike
 from pyteomics.fasta import FASTA
 from tqdm.auto import tqdm
 
+FASTA_NAME_REGEX = re.compile(r"^.*\|(.*)\|.*$")
+
 
 class ProteinNGram:
     """Implements an n-gram to fast lookup of proteins that match a peptide.
@@ -21,7 +23,6 @@ class ProteinNGram:
     """
 
     __slots__ = ("ngram_size", "ngram", "inv_alias")
-    FASTA_NAME_REGEX = re.compile(r"^.*\|(.*)\|.*$")
 
     def __init__(self, ngram: dict[str, set[int]], inv_alias: dict[int, str]) -> None:
         keys = list(ngram)
@@ -73,7 +74,6 @@ class ProteinNGram:
         """
         ngram = defaultdict(set)
         inv_alias = {}
-        FASTA_NAME_REGEX = ProteinNGram.FASTA_NAME_REGEX
 
         for i, entry in tqdm(
             enumerate(FASTA(fasta_file)),

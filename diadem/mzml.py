@@ -386,6 +386,10 @@ class StackedChromatograms:
             The minimum intensity ratio to use when stacking, by default 0.01
         min_correlation : float, optional
             The minimum correlation to use when stacking, by default 0.5
+        max_peaks : int, optional
+            The maximum number of peaks to return in a group, by default is 150.
+            If the candidates is more than this number, it will the best co-eluting
+            peaks.
 
         """
         # The center index is the same as the provided index
