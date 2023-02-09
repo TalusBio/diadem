@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import copy
 from collections import namedtuple
+from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Iterator, TypedDict
+from typing import Iterable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -37,15 +38,18 @@ def glimpse_array(arr: NDArray, name: str = None) -> str:
     return f"{name}: min={arr.min()}, max={arr.max()}, shape={arr.shape}"
 
 
-class PeptidePartialScoring(TypedDict):
-    """A partial scoring for a peptide.
-
-    Used internally to accumulate the score for a peptide.
-    """
-
-    intensity: float
-    npeaks: int
-    mzs: list[float]
+@lru_cache(1)
+def _make_score_dict(ions):
+    out = {
+        i: {
+            "intensities": 0.0,
+            "npeaks": 0,
+            "mzs": [],
+            "mass_errors": [],
+        }
+        for i in ions
+    }
+    return out
 
 
 SeqProperties = namedtuple(
@@ -55,6 +59,8 @@ SeqProperties = namedtuple(
 
 class PeptideScore:
     """Accumulates elements to calculate the score for a peptide."""
+
+    __slots__ = ("id", "ions", "partial_scores", "tot_peaks")
 
     def __init__(self, id: int, ions: str) -> None:
         """Accumulates elements to calculate the score for a peptide.
@@ -79,15 +85,7 @@ class PeptideScore:
         """  # noqa
         self.id: int = id
         self.ions = ions
-        self.partial_scores = {
-            i: {
-                "intensities": 0.0,
-                "npeaks": 0,
-                "mzs": [],
-                "mass_errors": [],
-            }
-            for i in ions
-        }
+        self.partial_scores = copy.deepcopy(_make_score_dict(ions))
         self.tot_peaks = 0
 
     def add_peak(self, ion: str, mz: float, intensity: float, error: float) -> None:
@@ -664,13 +662,18 @@ class IndexedDb:
                         scores[seq] = tmp
                 comparissons += 1
 
-        scores = {k: v for k, v in scores.items() if v.tot_peaks >= MIN_PEAKS}
+        PRELIM_FILTER = 200
+        peak_array = np.array([s.tot_peaks for s in scores.values()])
+        top_n_filter = min(PRELIM_FILTER, len(peak_array))
+        indices_top = np.argpartition(peak_array, -top_n_filter)[-top_n_filter:]
+
+        scores = list(scores.values())
+        scores = [scores[i] for i in indices_top]
+        scores = [v for v in scores if v.tot_peaks >= MIN_PEAKS]
         if not scores:
             return None
 
-        scores_df = pd.DataFrame.from_records(
-            [x.as_row_entry() for x in scores.values()]
-        )
+        scores_df = pd.DataFrame.from_records([x.as_row_entry() for x in scores])
         return scores_df
 
     # @profile

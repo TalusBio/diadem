@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from math import factorial as fact
 
 import numpy as np
@@ -6,7 +8,7 @@ from numpy.typing import NDArray
 
 EPS = 1e-8
 CUTOFF = 1
-NUM_ISOTOPES = 5
+NUM_ISOTOPES = 3
 
 
 def calc_averagine_dist(uncharged_mass: int | float, num_isotopes: int) -> list[float]:
@@ -48,10 +50,11 @@ class IntegerAveragines:
 
     cache = {
         i + 100: calc_averagine_dist(i + 100, num_isotopes=NUM_ISOTOPES)
-        for i in range(5000)
+        for i in range(10_000)
     }
 
     @classmethod
+    # @profile
     def calc_distribution(cls, mass: float | int) -> list[float]:
         """Returns the isotope distribution for a mass.
 
@@ -67,6 +70,8 @@ class IntegerAveragines:
         return out
 
 
+# @profile
+# @jit(nopython=True)
 def deisotope(
     mzs: NDArray[np.float32],
     intensities: NDArray[np.float32],
@@ -83,52 +88,50 @@ def deisotope(
 
     dm_order = np.argsort(flat_deltamasses)
     ordered_deltamasses = flat_deltamasses[dm_order]
+    odm = ordered_deltamasses.tolist()
 
-    gi = 0
-    out = []
+    out = [[[]] * len(odm)] * len(mzs)
+    # TODO rename to something that makes more sense ...
+    tmp = np.zeros((len(intensities), *flat_deltamasses.shape), dtype=np.float32)
 
-    for i, mz in enumerate(mzs):
-        matching = [[] for _, _ in enumerate(ordered_deltamasses)]
+    for dmi, dm in enumerate(odm):
+        gi = 0
+        for i, mz in enumerate(mzs):
+            mdm = mz + dm
+            assert (
+                mzs[gi] if gi > 0 else 0
+            ) <= mdm, f"mz[gi]=mz[{gi}]={mzs[gi]} <= mdm={mz + dm} ({mz} + {dm})"
 
-        for dmi, dm in enumerate(ordered_deltamasses):
             for ii, mz2 in enumerate(mzs[gi:], start=gi):
-                calc_dm = mz2 - (
-                    mz + dm
-                )  # low when mz is 2 big, high when mz2 is 2 big
+                # low when mz is 2 big, high when mz2 is 2 big
+                calc_dm = mz2 - mdm
                 if calc_dm < -max_dm:
                     gi = ii
                 elif calc_dm > max_dm:
                     break
                 else:
-                    matching[dmi].append(ii)
+                    out[i][dmi].append(ii)
+                    nj = dm_order[dmi]
+                    tmp[i, nj] += intensities[ii]
 
-        out.append(matching)
-
-    tmp = np.zeros((len(intensities), *flat_deltamasses.shape))
-
-    for i, iv in enumerate(out):
-        for j, jv in enumerate(iv):
-            nj = dm_order[j]
-            if len(jv) == 0:
-                tmp[i, nj] = 0
-            else:
-                tmp[i, nj] = np.sum(intensities[jv])
+    # TODO reshape here the 'out' list
 
     reshaped_summed_ints = tmp.reshape((len(intensities), len(charges), len(isotopes)))
     # now shape is [num_peaks, num_charges, num_isotopes]
 
-    norm_factor = np.einsum("mci -> mc", reshaped_summed_ints + EPS)
-    normed_summed_ints = (reshaped_summed_ints + EPS) / np.expand_dims(norm_factor, -1)
+    collapsed_intensities = np.einsum("mci -> mc", reshaped_summed_ints)
+    normed_summed_ints = (reshaped_summed_ints + EPS) / np.expand_dims(
+        collapsed_intensities + EPS, -1
+    )
 
     expected_isotopes = _calculate_isotopes_array(mzs=mzs, charges=charges)
     # expected isotopes is a tensor of shape [len(mzs), len(charges), len(isotopes)]
 
     # Kullback–Leibler Divergence
-    KL_divergence = (
-        expected_isotopes
-        * np.log((expected_isotopes + EPS) / (normed_summed_ints + EPS))
-    ).sum(axis=-1)
-    keep = KL_divergence < CUTOFF
+    distances = kld(
+        expected_isotopes=expected_isotopes, observed_isotopes=normed_summed_ints
+    )
+    keep = distances < CUTOFF
 
     all_used = set()
 
@@ -145,10 +148,10 @@ def deisotope(
             spectrum_indices = out[mzi][ei]
             cluster_indices.extend(spectrum_indices)
 
-        all_used.update(set(cluster_indices))
         mono_mass = mzs[mzi]
-        cluster_intensity = intensities[list(set(cluster_indices))].sum()
+        cluster_intensity = collapsed_intensities[mzi, ci]
 
+        all_used.update(set(cluster_indices))
         new_mzs.append(mono_mass)
         new_intensities.append(cluster_intensity)
 
@@ -160,9 +163,8 @@ def deisotope(
     new_order = np.argsort(new_mzs)
 
     new_mzs = new_mzs[new_order]
-    new_intensities = np.concatenate(
-        [np.array(new_intensities), intensities[unused_indices]]
-    )[new_order]
+    new_intensities = [np.array(new_intensities), intensities[unused_indices]]
+    new_intensities = np.concatenate(new_intensities)[new_order]
 
     return new_mzs, new_intensities
 
@@ -259,19 +261,21 @@ def kld(
     return out
 
 
+# @profile
 def _calculate_isotopes_array(
     mzs: NDArray[np.float32], charges: NDArray[np.int32]
 ) -> NDArray[np.float32]:
     # Since each isotope dist is given as an array of shape [num_isotopes], this
     # generates an array fo shape [mzs_length, num_charges, num_isotopes]
     # Adding the [0] is the expected abundance of the -1 isotope
-    expected_isotopes = []
-    for mz in mzs:
-        mz_isotopes = []
-        for c in charges:
-            mzc_isotopes = [0] + IntegerAveragines.calc_distribution(mz * c)
-            mz_isotopes.append(mzc_isotopes)
-        expected_isotopes.append(mz_isotopes)
+    chargelist = charges.tolist()  # done only for speedup...
 
-    expected_isotopes = np.array(expected_isotopes)
+    expected_isotopes = np.zeros(
+        (len(mzs), len(charges), NUM_ISOTOPES + 1), dtype=np.float32
+    )
+    for im, mz in enumerate(mzs.tolist()):
+        for ic, c in enumerate(chargelist):
+            mzc_isotopes = [0] + IntegerAveragines.calc_distribution(mz * c)
+            expected_isotopes[im, ic, :] = np.array(mzc_isotopes, dtype=np.float32)
+
     return expected_isotopes

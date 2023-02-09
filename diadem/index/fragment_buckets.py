@@ -359,13 +359,13 @@ class PrefilteredMS1BucketList:
         """
         self.prod_num = 10**num_decimal
         self.buckets = [[] for _ in range(int(max_frag_mz * self.prod_num))]
-        iterator = tqdm(buckets, desc="Unpacking buckets") if progress else buckets
+        iterator = tqdm(buckets, desc="Unpacking buckets", disable=not progress)
         for bucket in iterator:
             unpacked = self.unpack_bucket(bucket)
             for k, v in unpacked.items():
                 self.buckets[k].append(v)
 
-        iterator = enumerate(tqdm(self.buckets))
+        iterator = enumerate(tqdm(self.buckets, disable=not progress))
         min_ms2_mz = 2**15
         for i, e in iterator:
             if e:

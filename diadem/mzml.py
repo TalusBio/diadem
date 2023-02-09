@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -15,7 +16,8 @@ from numpy.typing import NDArray
 from pandas import DataFrame
 from tqdm.auto import tqdm
 
-from diadem.config import MassError
+from diadem.config import DiademConfig, MassError
+from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
 
 try:
@@ -71,7 +73,6 @@ class ScanGroup:
                 f" has {len(self.precursor_range)}"
             )
 
-    # @profile
     def get_highest_window(
         self,
         window: int,
@@ -431,6 +432,8 @@ class StackedChromatograms:
                 assert xic_outs[-1][0].sum() >= center_intensities.max()
 
         stacked_arr = np.stack([x[0] for x in xic_outs], axis=-1)
+
+        # TODO make this an array and subset it in line 457
         indices = [x[1] for x in xic_outs]
 
         if stacked_arr.shape[-2] > 1:
@@ -469,7 +472,7 @@ class StackedChromatograms:
 class SpectrumStacker:
     """Helper class that stacks the spectra of an mzml file into chromatograms."""
 
-    def __init__(self, mzml_file: Path | str, config: Config) -> None:
+    def __init__(self, mzml_file: Path | str, config: DiademConfig) -> None:
         """Initializes the SpectrumStacker class.
 
         Parameters
@@ -486,6 +489,12 @@ class SpectrumStacker:
         # also evaluate if that is needed
         scaninfo = self.adapter.get_scan_info()
         self.config = config
+        if "DEBUG_DIADEM" in os.environ:
+            logger.error("RUNNING DIADEM IN DEBUG MODE (only 700-710 mz iso windows)")
+            scaninfo = scaninfo[scaninfo.ms_level > 1]
+            scaninfo = scaninfo[
+                [x[0] > 700 and x[0] < 705 for x in scaninfo.iso_window]
+            ]
         self.ms2info = scaninfo[scaninfo.ms_level > 1].copy().reset_index()
         self.unique_iso_windows = set(np.array(self.ms2info.iso_window))
 
@@ -501,6 +510,9 @@ class SpectrumStacker:
         window_rtinsecs = []
         window_scanids = []
 
+        npeaks_raw = []
+        npeaks_deisotope = []
+
         for row in tqdm(
             chunk.itertuples(), desc=f"Preprocessing spectra for {iso_window_name}"
         ):
@@ -509,9 +521,11 @@ class SpectrumStacker:
             # NOTE instrument seems to have a wrong value ...
             # Also activation seems to not be recorded ...
             curr_spec = curr_spec.filter_top(self.config.run_max_peaks_per_spec)
+            curr_spec = curr_spec.filter_mz_range(*self.config.ion_mz_range)
 
             # Deisotoping!
             if self.config.run_deconvolute_spectra:
+                """
                 deconvoluted_peaks, _ = ms_deisotope.deconvolute_peaks(
                     (curr_spec.mz, curr_spec.intensity),
                     averagine=ms_deisotope.peptide,
@@ -527,6 +541,15 @@ class SpectrumStacker:
 
                 mzs = np.array([x.mz for x in deconvoluted_peaks])
                 intensities = np.array([x.intensity for x in deconvoluted_peaks])
+                """
+                # max_dm=self.config.g_tolerances
+                # currently, deisotoping is using fixed mass error parameters
+                order = np.argsort(curr_spec.mz)
+                npeaks_raw.append(len(order))
+                mzs, intensities = deisotope(
+                    mzs=curr_spec.mz[order], intensities=curr_spec.intensity[order]
+                )
+                npeaks_deisotope.append(len(mzs))
             else:
                 mzs = curr_spec.mz
                 intensities = curr_spec.intensity
@@ -546,8 +569,14 @@ class SpectrumStacker:
             window_rtinsecs.append(rtinsecs)
             window_scanids.append(spec_id)
 
+        avg_peaks_raw = np.array(npeaks_raw).mean()
+        avg_peaks_deisotope = np.array(npeaks_deisotope).mean()
         # Create datasets within each group
         logger.info(f"Saving group {iso_window_name} with length {len(window_mzs)}")
+        logger.info(
+            f"{avg_peaks_raw} peaks/spec; {avg_peaks_deisotope} peaks/spec after"
+            " deisotoping"
+        )
 
         window_bp_mz = np.array(window_bp_mz).astype(np.float32)
         window_bp_int = np.array(window_bp_int).astype(np.float32)

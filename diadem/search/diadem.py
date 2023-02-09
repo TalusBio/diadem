@@ -13,7 +13,7 @@ from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
-from diadem.index.indexed_db import IndexedDb, db_from_fasta
+from diadem.index.indexed_db import IndexedDb
 from diadem.mzml import ScanGroup, SpectrumStacker, StackedChromatograms
 from diadem.search.search_utils import make_pin
 
@@ -120,7 +120,7 @@ def search_group(
                 precursor_mz=group.precursor_range,
                 spec_int=scoring_intensities,
                 spec_mz=new_stack.mzs,
-                top_n=10,
+                top_n=1,
             )
         else:
             scores = None
@@ -237,12 +237,12 @@ def diadem_main(
     start_time = time.time()
 
     # Set up database
-    db = db_from_fasta(
-        fasta=fasta_path,
-        config=config,
-        # chunksize=2**11,
-        chunksize=2**15,
-    )
+    # db = db_from_fasta(
+    #     fasta=fasta_path,
+    #     config=config,
+    #     chunksize=2**11,
+    #     # chunksize=2**15,
+    # )
 
     # set up mzml file
     ss = SpectrumStacker(
@@ -259,7 +259,6 @@ def diadem_main(
             results.append(group_results)
     else:
         with Parallel(n_jobs=config.run_parallelism) as workerpool:
-            # with Parallel(n_jobs=4) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
             dbs = [db.prefilter_ms1(group.precursor_range) for group in groups]
             results = workerpool(
