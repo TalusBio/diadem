@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 import rich_click as click
@@ -12,9 +13,15 @@ from diadem.search.diadem import diadem_main
 
 def setup_logger() -> None:
     """Sets up the logger to level info and a sink to a log file."""
-    logger.remove()
-    logger.add(sys.stderr, level="INFO")
-    logger.add("diadem_log.log", diagnose=False)
+    if "DEBUG_DIADEM" in os.environ:
+        logger.remove()
+        logger.add(sys.stderr, level="DEBUG")
+        logger.add("diadem_log.log", diagnose=False)
+        logger.error("RUNNING DIADEM IN DEBUG MODE")
+    else:
+        logger.remove()
+        logger.add(sys.stderr, level="INFO")
+        logger.add("diadem_log.log", diagnose=False)
 
 
 @click.group("main_cli")

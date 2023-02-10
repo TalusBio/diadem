@@ -13,7 +13,7 @@ from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
-from diadem.index.indexed_db import IndexedDb
+from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.mzml import ScanGroup, SpectrumStacker, StackedChromatograms
 from diadem.search.search_utils import make_pin
 
@@ -94,7 +94,7 @@ def search_group(
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
 
-        if last_id is new_stack.parent_index:
+        if last_id == new_stack.parent_index:
             logger.debug(
                 "Array generated on same index "
                 f"{new_stack.parent_index} as last iteration"
@@ -104,6 +104,11 @@ def search_group(
             last_id = new_stack.parent_index
 
         match_id = f"{group.iso_window_name}::{new_stack.parent_index}::{num_peaks}"
+
+        # assert new_stack.base_peak_intensity <= curr_highest_peak_int
+        # The current base peak can be higher than the former if several peaks are
+        # integrated into the stacked chromatograms.
+
         curr_highest_peak_int = new_stack.base_peak_intensity
         intensity_log.append(curr_highest_peak_int)
         index_log.append(last_id)
@@ -237,12 +242,12 @@ def diadem_main(
     start_time = time.time()
 
     # Set up database
-    # db = db_from_fasta(
-    #     fasta=fasta_path,
-    #     config=config,
-    #     chunksize=2**11,
-    #     # chunksize=2**15,
-    # )
+    db = db_from_fasta(
+        fasta=fasta_path,
+        config=config,
+        chunksize=2**11,
+        # chunksize=2**15,
+    )
 
     # set up mzml file
     ss = SpectrumStacker(

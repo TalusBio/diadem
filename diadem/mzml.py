@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
 
-import ms_deisotope
 import numpy as np
 from joblib import Parallel, delayed
 from loguru import logger
-from ms2ml import Config, Spectrum
+from ms2ml import Spectrum
 from ms2ml.data.adapters import MZMLAdapter
 from ms2ml.utils.mz_utils import annotate_peaks
 from numpy.typing import NDArray
@@ -36,6 +35,17 @@ except TypeError:
         if len(lengs) > 1:
             raise ValueError("All arguments need to have the same legnths")
         return zip(*args)
+
+
+def is_sorted(a: NDArray) -> bool:
+    """Checks if an array is sorted."""
+    return np.all(a[:-1] <= a[1:])
+
+
+def check_sorted(a: NDArray) -> None:
+    """Raises an error if the array is not sorted."""
+    if not is_sorted(a):
+        raise RuntimeError("Array expected to be sorted is not")
 
 
 @dataclass
@@ -544,10 +554,18 @@ class SpectrumStacker:
                 """
                 # max_dm=self.config.g_tolerances
                 # currently, deisotoping is using fixed mass error parameters
+
                 order = np.argsort(curr_spec.mz)
                 npeaks_raw.append(len(order))
+
+                mzs = curr_spec.mz[order]
+                intensities = curr_spec.intensity[order]
                 mzs, intensities = deisotope(
-                    mzs=curr_spec.mz[order], intensities=curr_spec.intensity[order]
+                    mzs,
+                    intensities,
+                    5,
+                    self.config.g_tolerances[1],
+                    unit=self.config.g_tolerance_units[1],
                 )
                 npeaks_deisotope.append(len(mzs))
             else:
@@ -581,6 +599,7 @@ class SpectrumStacker:
         window_bp_mz = np.array(window_bp_mz).astype(np.float32)
         window_bp_int = np.array(window_bp_int).astype(np.float32)
         window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
+        check_sorted(window_rtinsecs)
         window_scanids = np.array(window_scanids, dtype="object")
 
         group = ScanGroup(
