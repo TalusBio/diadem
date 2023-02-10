@@ -20,7 +20,7 @@ from tqdm.auto import tqdm
 from diadem.config import DiademConfig
 from diadem.index.caching import file_cache_dir
 from diadem.index.fragment_buckets import FragmentBucketList
-from diadem.utils import disabled_gc, make_decoy
+from diadem.utils import disabled_gc, is_sorted, make_decoy
 
 # Pre-calculating factorials so I do not need
 # to calculate them repeatedly while scoring
@@ -32,6 +32,9 @@ LOG_FACTORIALS = np.cumsum(np.log(np.arange(1, 1000)))
 
 DEFAULT_CONFIG = DiademConfig()
 
+# TODO add this to the config
+PRELIM_FILTER = 200
+
 
 def glimpse_array(arr: NDArray, name: str = None) -> str:
     """Utility function to get simple metrics on an array."""
@@ -39,7 +42,8 @@ def glimpse_array(arr: NDArray, name: str = None) -> str:
 
 
 @lru_cache(1)
-def _make_score_dict(ions):
+def _make_score_dict(ions: str) -> dict[str, dict[str, float | list[float]]]:
+    """Internal function that generates dictionary to help with scoring."""
     out = {
         i: {
             "intensities": 0.0,
@@ -101,6 +105,8 @@ class PeptideScore:
             The m/z of the peak.
         intensity : float
             The intensity of the peak to add.
+        error : float
+            The mass error of the peak to add.
         """
         self.partial_scores[ion]["intensities"] += intensity
         self.partial_scores[ion]["npeaks"] += 1
@@ -327,6 +333,7 @@ class IndexedDb:
             start_id=last_id + 1,
         )
 
+    # @profile
     def index_from_parquet(self, dir: Path | str) -> None:
         """Generates as index from the passed directory of parquet files.
 
@@ -527,14 +534,25 @@ class IndexedDb:
 
         """
         # Sorted externally by ms2 mz
-        logger.info(f"Sorting by ms2 mz. {frag_mzs.size} total fragments")
         with disabled_gc():
-            sorted_frags, sorted_frag_series, sorted_seq_ids = sort_all(
-                frag_mzs, frag_series, seq_ids
+            logger.debug(
+                f"Sorting by ms2 mz. {frag_mzs.size} total fragments (if needed)"
             )
+            if not is_sorted(frag_mzs):
+                sorted_frags, sorted_frag_series, sorted_seq_ids = sort_all(
+                    frag_mzs, frag_series, seq_ids
+                )
+                logger.debug("Done sorting (and GC), generating bucketlists")
+            else:
+                logger.debug("Skippping sortinb because it is already sorted.")
+                sorted_frags, sorted_frag_series, sorted_seq_ids = (
+                    frag_mzs,
+                    frag_series,
+                    seq_ids,
+                )
+
             del frag_mzs, seq_ids, frag_series
 
-        logger.info("Done sorting (and GC), generating bucketlists")
         self.bucketlist = FragmentBucketList.from_arrays(
             fragment_mzs=sorted_frags,
             fragment_series=sorted_frag_series,
@@ -630,8 +648,7 @@ class IndexedDb:
             )
             ms1_range = (precursor_mz - ms1_tol, precursor_mz + ms1_tol)
 
-        scores = {}
-        comparissons = 0
+        peaks = []
 
         for fragment_mz, fragment_intensity in zip(spec_mz, spec_int):
             ms2_tol = get_tolerance(
@@ -649,27 +666,34 @@ class IndexedDb:
                 # Should tolerances be checked here?
                 dm = frag - fragment_mz
                 if abs(dm) <= ms2_tol:
-                    try:
-                        scores[seq].add_peak(
-                            series, fragment_mz, fragment_intensity, dm
-                        )
-                    except KeyError:
-                        tmp = PeptideScore(
-                            seq,
-                            self.config.ion_series,
-                        )
-                        tmp.add_peak(series, fragment_mz, fragment_intensity, dm)
-                        scores[seq] = tmp
-                comparissons += 1
+                    peaks.append(
+                        {
+                            "seq": seq,
+                            "ion": series,
+                            "mz": fragment_mz,
+                            "intensity": fragment_intensity,
+                            "error": dm,
+                        }
+                    )
 
-        PRELIM_FILTER = 200
-        peak_array = np.array([s.tot_peaks for s in scores.values()])
-        top_n_filter = min(PRELIM_FILTER, len(peak_array))
-        indices_top = np.argpartition(peak_array, -top_n_filter)[-top_n_filter:]
+        peptide_ids = np.array([x["seq"] for x in peaks])
+        ids, counts = np.unique(peptide_ids, return_counts=True)
+        gt_min = counts > MIN_PEAKS
+        ids, counts = ids[gt_min], counts[gt_min]
+
+        # Just makes sure we dont access more elements than we have
+        # ie: top 200 out of 100 candidates.
+        top_n_filter = min(PRELIM_FILTER, len(counts))
+        indices_top = np.argpartition(counts, -top_n_filter)[-top_n_filter:]
+        keep_ids = ids[indices_top]
+
+        scores = {id: PeptideScore(id, self.config.ion_series) for id in keep_ids}
+        for peak in peaks:
+            pep_id = peak.pop("seq")
+            if pep_id in scores:
+                scores[pep_id].add_peak(**peak)
 
         scores = list(scores.values())
-        scores = [scores[i] for i in indices_top]
-        scores = [v for v in scores if v.tot_peaks >= MIN_PEAKS]
         if not scores:
             return None
 
@@ -715,8 +739,16 @@ class IndexedDb:
         scores["Score"] = (
             scores["log_factorial_peak_sum"] + scores["log_intensity_sums"]
         )
+        # Calculate requirements for the z score among all other proposed scores!
+        score_mean = scores["Score"].mean()
+        score_sd = scores["Score"].std()
+
         scores = scores.nlargest(top_n, "Score", keep="all")
         scores.sort_values("Score", ascending=False, inplace=True)
+
+        # Calculate the z-score and fill with 0s if the sd is 0.
+        scores["ScoreZ"] = (scores["Score"] - score_mean) / score_sd
+        scores["ScoreZ"].fillna(0, inplace=True)
         scores["rank"] = [i + 1 for i in range(len(scores))]
         scores["Peptide"] = self.seqs[scores["id"].values]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]

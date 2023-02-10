@@ -18,6 +18,7 @@ from tqdm.auto import tqdm
 from diadem.config import DiademConfig, MassError
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
+from diadem.utils import check_sorted
 
 try:
     zip([], [], strict=True)
@@ -35,17 +36,6 @@ except TypeError:
         if len(lengs) > 1:
             raise ValueError("All arguments need to have the same legnths")
         return zip(*args)
-
-
-def is_sorted(a: NDArray) -> bool:
-    """Checks if an array is sorted."""
-    return np.all(a[:-1] <= a[1:])
-
-
-def check_sorted(a: NDArray) -> None:
-    """Raises an error if the array is not sorted."""
-    if not is_sorted(a):
-        raise RuntimeError("Array expected to be sorted is not")
 
 
 @dataclass
@@ -180,11 +170,21 @@ def xic(
     mzs: NDArray[np.float32],
     tolerance_unit: MassError = "da",
     tolerance: float = 0.02,
-) -> NDArray[np.float32]:
+) -> tuple[NDArray[np.float32], list[list[int]]]:
     """Gets the extracted ion chromatogram form arrays.
 
     Gets the extracted ion chromatogram from the passed mzs and intensities
     The output should be the same length as the passed mzs.
+
+    Returns
+    -------
+    NDArray[np.float32]
+        An array of length `len(mzs)` that integrates such masses in
+        the query_int (matching with the query_mz array ...)
+
+    list[list[int]]
+        A nested list of length `len(mzs)` where each sub-list contains
+        the indices of the `query_int` array that were integrated.
 
     """
     theo_mz_indices, obs_mz_indices = annotate_peaks(
@@ -535,26 +535,7 @@ class SpectrumStacker:
 
             # Deisotoping!
             if self.config.run_deconvolute_spectra:
-                """
-                deconvoluted_peaks, _ = ms_deisotope.deconvolute_peaks(
-                    (curr_spec.mz, curr_spec.intensity),
-                    averagine=ms_deisotope.peptide,
-                    scorer=ms_deisotope.MSDeconVFitter(0),
-                    retention_strategy=ms_deisotope.deconvolution.TopNRetentionStrategy(
-                        50, max_mass=2000
-                    ),
-                    charge_range=(1, 3),
-                )
-
-                # For scorer discussion please refer to
-                # check https://mobiusklein.github.io/ms_deisotope/docs/_build/html/deconvolution/envelope_scoring.html#ms_deisotope.scoring.IsotopicFitterBase
-
-                mzs = np.array([x.mz for x in deconvoluted_peaks])
-                intensities = np.array([x.intensity for x in deconvoluted_peaks])
-                """
-                # max_dm=self.config.g_tolerances
-                # currently, deisotoping is using fixed mass error parameters
-
+                # Masses need to be ordered for the deisotoping function!
                 order = np.argsort(curr_spec.mz)
                 npeaks_raw.append(len(order))
 
@@ -563,8 +544,8 @@ class SpectrumStacker:
                 mzs, intensities = deisotope(
                     mzs,
                     intensities,
-                    5,
-                    self.config.g_tolerances[1],
+                    max_charge=5,
+                    diff=self.config.g_tolerances[1],
                     unit=self.config.g_tolerance_units[1],
                 )
                 npeaks_deisotope.append(len(mzs))

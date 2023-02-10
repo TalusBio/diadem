@@ -125,3 +125,9 @@ def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
 def is_sorted(a: NDArray) -> bool:
     """Checks if an array is sorted."""
     return np.all(a[:-1] <= a[1:])
+
+
+def check_sorted(a: NDArray) -> None:
+    """Raises an error if the array is not sorted."""
+    if not is_sorted(a):
+        raise RuntimeError("Array expected to be sorted is not")

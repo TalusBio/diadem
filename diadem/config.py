@@ -71,8 +71,9 @@ class DiademConfig:  # noqa
     run_deconvolute_spectra: bool = True
     run_min_peak_intensity: float = 100
     run_debug_log_frequency: int = 20
-    run_allowed_fails: int = 50
+    run_allowed_fails: int = 500
     run_window_size: int = 21
+    run_max_peaks_per_window: int = 150
 
     # Min intensity to consider for matching and extracting
     run_min_intensity_ratio: float = 0.011

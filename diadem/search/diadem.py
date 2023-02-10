@@ -45,6 +45,7 @@ def search_group(
     DEBUG_FREQUENCY = config.run_debug_log_frequency  # noqa
     ALLOWED_FAILS = config.run_allowed_fails  # noqa
     WINDOWSIZE = config.run_window_size  # noqa
+    WINDOW_MAX_PEAKS = config.run_max_peaks_per_window  # noqa
 
     MIN_INTENSITY_SCALING, MAX_INTENSITY_SCALING = config.run_scalin_limits  # noqa
     SCALING_RATIO = config.run_scaling_ratio  # noqa
@@ -89,7 +90,7 @@ def search_group(
             min_correlation=MIN_CORR_SCORE,
             tolerance=MS2_TOLERANCE,
             tolerance_unit=MS2_TOLERANCE_UNIT,
-            max_peaks=MAX_PEAKS,
+            max_peaks=WINDOW_MAX_PEAKS,
         )
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
