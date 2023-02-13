@@ -366,6 +366,8 @@ class PrefilteredMS1BucketList:
                 self.buckets[k].append(v)
 
         iterator = enumerate(tqdm(self.buckets, disable=not progress))
+
+        # This gets progressively updated with the minimum bucket size.
         min_ms2_mz = 2**15
         for i, e in iterator:
             if e:
@@ -374,6 +376,8 @@ class PrefilteredMS1BucketList:
                 cat_buckets.sort()
                 if len(cat_buckets) > 0:
                     self.buckets[i] = cat_buckets
+
+                    # Update the minimum ms2 mz value in the bucket.
                     if self.buckets[i].min_frag_mz < min_ms2_mz:
                         min_ms2_mz = self.buckets[i].min_frag_mz
 
@@ -440,13 +444,12 @@ class PrefilteredMS1BucketList:
         # Note: the ms1 range argument is not used here but kept
         # to maintain the same interface as the non-prefiltered database.
         min_mz, max_mz = ms2_range
-        # last_mz = 0
+        last_mz = 0
         for x in self.yield_buckets_matching_ms2(min_mz, max_mz):
-            for sid, fragmz, fragseries in zip(
+            for precursor_id, fragmz, fragseries in zip(
                 x.precursor_ids, x.fragment_mzs, x.fragment_series
             ):
                 if fragmz > max_mz:
                     break
-                # assert fragmz >= last_mz, "Fragment mzs not sorted"
-                # last_mz = fragmz
-                yield sid, fragmz, fragseries
+                assert last_mz <= (last_mz := fragmz), "Fragment mzs not sorted"
+                yield precursor_id, fragmz, fragseries

@@ -46,7 +46,7 @@ def dda_main(
     start_time = time.time()
 
     # Set up database
-    db = db_from_fasta(
+    db, cache = db_from_fasta(
         fasta=fasta_path,
         config=config,
         chunksize=config.db_bucket_size,

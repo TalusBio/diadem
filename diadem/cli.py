@@ -11,7 +11,7 @@ from diadem.search.dda import dda_main
 from diadem.search.diadem import diadem_main
 
 
-def setup_logger() -> None:
+def setup_logger(logger=logger, level="INFO") -> None:
     """Sets up the logger to level info and a sink to a log file."""
     if "DEBUG_DIADEM" in os.environ:
         logger.remove()
@@ -20,8 +20,10 @@ def setup_logger() -> None:
         logger.error("RUNNING DIADEM IN DEBUG MODE")
     else:
         logger.remove()
-        logger.add(sys.stderr, level="INFO")
+        logger.add(sys.stderr, level=level)
         logger.add("diadem_log.log", diagnose=False)
+
+    return logger
 
 
 @click.group("main_cli")

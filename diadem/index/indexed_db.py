@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 from collections import namedtuple
 from functools import lru_cache
+from os import PathLike
 from pathlib import Path
 from typing import Iterable, Iterator
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from fastparquet import write as write_parquet
 from loguru import logger
 from ms2ml import Config, Peptide
@@ -19,7 +21,11 @@ from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
 from diadem.index.caching import file_cache_dir
-from diadem.index.fragment_buckets import FragmentBucketList
+from diadem.index.fragment_buckets import (
+    FragmentBucket,
+    FragmentBucketList,
+    PrefilteredMS1BucketList,
+)
 from diadem.utils import disabled_gc, is_sorted, make_decoy
 
 # Pre-calculating factorials so I do not need
@@ -294,7 +300,7 @@ class IndexedDb:
             A copy of the database including only the fragments that
             match the provided m/z.
         """
-        logger.info(f"Filtering ms1 ranges in database {self.name}")
+        logger.info(f"Filtering ms1 ranges {ms1_range} in database {self.name}")
         out = copy.copy(self)
 
         out.bucketlist = self.bucketlist.prefilter_ms1(
@@ -303,6 +309,7 @@ class IndexedDb:
         out.prefiltered_ms1 = True
         out.seq_prec_mzs = self.seq_prec_mzs
         out.seqs = self.seqs
+        out.seq_ids = self.seq_ids
 
         return out
 
@@ -366,7 +373,7 @@ class IndexedDb:
         self.index_from_arrays(
             frags_df["mz"].values,
             frag_series=frags_df["ion_series"].values,
-            seq_ids=frags_df["seq_id"].values,
+            frag_to_prec_ids=frags_df["seq_id"].values,
             prec_mzs=seqs_df["seq_mz"].values,
             prec_seqs=seqs_df["seq_proforma"].values,
         )
@@ -498,7 +505,7 @@ class IndexedDb:
         self.index_from_arrays(
             frag_mzs=frag_mzs,
             frag_series=frag_series,
-            seq_ids=seq_ids,
+            frag_to_prec_ids=seq_ids,
             prec_mzs=prec_mzs,
             prec_seqs=prec_seqs,
         )
@@ -507,9 +514,10 @@ class IndexedDb:
         self,
         frag_mzs: NDArray[np.float32],
         frag_series: NDArray[np.str],
-        seq_ids: NDArray[np.int64],
+        frag_to_prec_ids: NDArray[np.int64],
         prec_mzs: NDArray[np.float32],
         prec_seqs: NDArray[np.str],
+        prec_ids: None | NDArray[np.int64] = None,
     ) -> None:
         """Generates an index of fragmnents from a series of arrays.
 
@@ -519,20 +527,27 @@ class IndexedDb:
             An array of fragment m/z values.
         frag_series : NDArray[np.str]
             An array of fragment ion series.
-        seq_ids : NDArray[np.int64]
+        frag_to_prec_ids : NDArray[np.int64]
             An array of sequence ids. (unique identifier of a peptide sequence)
         prec_mzs : NDArray[np.float32]
             An array of precursor m/z values.
         prec_seqs : NDArray[np.str]
             An array of precursor sequences.
+        prec_ids: NDArray[np.int64]
+            An array with the sequence ids of the precursors.
 
 
         Notes
         -----
-        The dimensions of the frag_mzs, frag_series and seq_ids need to be the same.
-        And the dimensions of the prec_mzs and prec_seqs also have to be the same.
+        The dimensions of the frag_mzs, frag_series and frag_to_prec_ids need
+        to be the same.
+        And the dimensions of the prec_mzs, prec_seqs and prec_ids
+        also have to be the same.
 
         """
+        assert len(prec_mzs) == len(prec_seqs)
+        assert all(len(frag_mzs) == len(x) for x in [frag_series, frag_to_prec_ids])
+
         # Sorted externally by ms2 mz
         with disabled_gc():
             logger.debug(
@@ -540,7 +555,7 @@ class IndexedDb:
             )
             if not is_sorted(frag_mzs):
                 sorted_frags, sorted_frag_series, sorted_seq_ids = sort_all(
-                    frag_mzs, frag_series, seq_ids
+                    frag_mzs, frag_series, frag_to_prec_ids
                 )
                 logger.debug("Done sorting (and GC), generating bucketlists")
             else:
@@ -548,10 +563,10 @@ class IndexedDb:
                 sorted_frags, sorted_frag_series, sorted_seq_ids = (
                     frag_mzs,
                     frag_series,
-                    seq_ids,
+                    frag_to_prec_ids,
                 )
 
-            del frag_mzs, seq_ids, frag_series
+            del frag_mzs, frag_to_prec_ids, frag_series
 
         self.bucketlist = FragmentBucketList.from_arrays(
             fragment_mzs=sorted_frags,
@@ -565,6 +580,10 @@ class IndexedDb:
 
         self.seq_prec_mzs = prec_mzs
         self.seqs = prec_seqs
+        if prec_ids is None:
+            self.seq_ids = np.arange(len(prec_seqs))
+        else:
+            self.seq_ids = prec_ids
 
     # @profile
     def seq_properties(self, x: Peptide) -> SeqProperties:
@@ -729,6 +748,7 @@ class IndexedDb:
         DataFrame
             A dataframe with the top scoring peptides.
         """
+        assert len(self.seq_ids) == len(self.seqs)
         scores = self.score_arrays(
             precursor_mz=precursor_mz, spec_mz=spec_mz, spec_int=spec_int
         )
@@ -750,14 +770,80 @@ class IndexedDb:
         scores["ScoreZ"] = (scores["Score"] - score_mean) / score_sd
         scores["ScoreZ"].fillna(0, inplace=True)
         scores["rank"] = [i + 1 for i in range(len(scores))]
-        scores["Peptide"] = self.seqs[scores["id"].values]
+
+        indices_seqs_local = np.searchsorted(self.seq_ids, scores["id"].values)
+        assert np.allclose(self.seq_ids[indices_seqs_local], scores["id"].values)
+
+        scores["Peptide"] = self.seqs[indices_seqs_local]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
 
         return scores
 
+    # @profile
+    def index_prefiltered_from_parquet(
+        self, cache_path: PathLike, min_mz: float, max_mz: float
+    ) -> IndexedDb:
+        """Generates a pre-filtered index from a parquet cache.
 
-# TODO add logging to sql reading
-def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> IndexedDb:
+        The parquet cache is a directory with 2 parquet files, the frags.parquet
+        and the seqs.parquet.
+
+        This function queries the files and returns a indexed db with only the required
+        data.
+        """
+        frags_df = pl.scan_parquet(str(cache_path) + "/frags.parquet")
+        seqs_df = pl.scan_parquet(str(cache_path) + "/seqs.parquet")
+
+        logger.info(
+            f"Filtering ms1 ranges {min_mz} to {max_mz} in database {self.name}"
+        )
+        chunk_seq_df = seqs_df.filter(pl.col("seq_mz") >= min_mz).filter(
+            pl.col("seq_mz") < max_mz
+        )
+        joint_frags = (
+            frags_df.join(
+                chunk_seq_df.select(["seq_id", "seq_mz"]), on="seq_id", how="inner"
+            )
+            .sort(pl.col("mz"))
+            .collect()
+        )
+
+        out = copy.copy(self)
+        out.bucketlist = PrefilteredMS1BucketList(
+            [
+                FragmentBucket(
+                    fragment_mzs=joint_frags["mz"].to_numpy(),
+                    fragment_series=joint_frags["ion_series"].to_numpy(),
+                    precursor_ids=joint_frags["seq_id"].to_numpy(),
+                    precursor_mzs=joint_frags["seq_mz"].to_numpy(),
+                    sorting_level="ms2",
+                    is_sorted=True,
+                )
+            ],
+            num_decimal=2,
+            max_frag_mz=2000,
+        )
+
+        out.prefiltered_ms1 = True
+        # TODO change it so the only required section
+        # is the proforma seqs that are in the mz range
+        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).collect()
+        out.seq_prec_mzs = chunk_seq_df_coll["seq_mz"].to_numpy()
+        out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
+        out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
+
+        target_set = set(
+            chunk_seq_df.filter(pl.col("decoy") is False)
+            .select(["seq_proforma"])
+            .collect()["seq_proforma"]
+        )
+        out.target_proforma = target_set
+        return out
+
+
+def db_from_fasta(
+    fasta: Path | str, chunksize: int, config: DiademConfig, index: bool = True
+) -> tuple[IndexedDb, str]:
     """Created a peak index database from a fasta file.
 
     It internally checks the existance of a cache in the form of an sqlite file.
@@ -775,5 +861,8 @@ def db_from_fasta(fasta: Path | str, chunksize: int, config: DiademConfig) -> In
         db.generate_to_parquet(dir=curr_cache)
     else:
         logger.info(f"Found cache location at: {curr_cache}, will use those values.")
-    db.index_from_parquet(dir=curr_cache)
-    return db
+
+    if index:
+        db.index_from_parquet(dir=curr_cache)
+
+    return db, curr_cache

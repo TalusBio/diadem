@@ -1,3 +1,4 @@
+from os import PathLike
 from pathlib import Path
 
 from pandas import DataFrame
@@ -6,7 +7,13 @@ from pyteomics.proforma import parse
 from diadem.index.protein_index import ProteinNGram
 
 
-def make_pin(results: DataFrame, fasta_path, mzml_path, pin_path):
+def make_pin(
+    results: DataFrame, fasta_path: PathLike, mzml_path: PathLike, pin_path: PathLike
+) -> None:
+    """Makes a '.pin' file from a dataframe of results.
+
+    It writes the .pin file to disk (`pin_path` argument).
+    """
     # Postprocessing of the results dataframe for percolator
     ## 1. keep only rank 1 peptides
     results = results[results["rank"] == 1]

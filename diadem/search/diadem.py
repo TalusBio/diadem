@@ -243,11 +243,8 @@ def diadem_main(
     start_time = time.time()
 
     # Set up database
-    db = db_from_fasta(
-        fasta=fasta_path,
-        config=config,
-        chunksize=2**11,
-        # chunksize=2**15,
+    db, cache = db_from_fasta(
+        fasta=fasta_path, chunksize=None, config=config, index=False
     )
 
     # set up mzml file
@@ -260,13 +257,17 @@ def diadem_main(
 
     if config.run_parallelism == 1:
         for group in ss.yield_iso_window_groups(progress=True):
-            group_db = db.prefilter_ms1(group.precursor_range)
+            group_db = db.index_prefiltered_from_parquet(cache, *group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
             results.append(group_results)
     else:
         with Parallel(n_jobs=config.run_parallelism) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
-            dbs = [db.prefilter_ms1(group.precursor_range) for group in groups]
+            precursor_ranges = [group.precursor_range for group in groups]
+            dbs = workerpool(
+                delayed(db.index_prefiltered_from_parquet)(cache, *prange)
+                for prange in precursor_ranges
+            )
             results = workerpool(
                 delayed(search_group)(group=group, db=pfdb, config=config)
                 for group, pfdb in zip(groups, dbs)
@@ -275,6 +276,10 @@ def diadem_main(
     results: pd.DataFrame = pd.concat(results, ignore_index=True)
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
+    prefix_dir = Path(prefix).absolute()
+
+    prefix_dir.parent.mkdir(exist_ok=True)
+
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
     results.to_parquet(prefix + ".parquet", index=False, engine="pyarrow")

@@ -27,6 +27,10 @@ class ProteinNGram:
     __slots__ = ("ngram_size", "ngram", "inv_alias")
 
     def __init__(self, ngram: dict[str, set[int]], inv_alias: dict[int, str]) -> None:
+        """Initialized an ngram for fast lookup.
+
+        For details check the main class docstring.
+        """
         keys = list(ngram)
         if not all(len(keys[0]) == len(k) for k in ngram):
             raise ValueError("All ngram keys need to be the same length")
@@ -35,6 +39,7 @@ class ProteinNGram:
         self.inv_alias = inv_alias
 
     def search_ngram(self, entry: str) -> list[str]:
+        """Searches a sequence using the n-gram and returns the matches."""
         candidates = None
         for x in [
             entry[x : x + self.ngram_size]
@@ -58,17 +63,18 @@ class ProteinNGram:
     @staticmethod
     def from_fasta(
         fasta_file: PathLike | str, ngram_size: int = 4, progress: bool = True
-    ):
+    ) -> ProteinNGram:
         """Builds a protein n-gram from a fasta file.
 
         Parameters
         ----------
         fasta_file:
-            Path-like or string representing the fasta file to read in order to build the index.
+            Path-like or string representing the fasta file to read in order
+            to build the index.
         ngram_size:
-            Size of the chunks that will be used to build the n-gram, should be smaller than the
-            smallest peptide to be searched. Longer sequences should give a more unique aspect to
-            it but a larger index is built.
+            Size of the chunks that will be used to build the n-gram, should
+            be smaller than the smallest peptide to be searched. Longer sequences
+            should give a more unique aspect to it but a larger index is built.
         progress:
             Whether to show a progress bar while building the index.
 
