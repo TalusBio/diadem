@@ -1,3 +1,5 @@
+import numpy as np
+
 from diadem.config import DiademConfig
 from diadem.index.indexed_db import IndexedDb
 
@@ -26,5 +28,5 @@ def test_database_from_fasta(shared_datadir, sample_peaks):
 
     mzs, ints, z2_mass = sample_peaks
     scores = db.hyperscore(z2_mass, mzs, ints)
-    assert "VPQVSTPTLVEVSR/2" in set(scores["Peptide"])
+    assert "VPQVSTPTLVEVSR/2" in set(scores["Peptide"][np.invert(scores["decoy"])])
     return db

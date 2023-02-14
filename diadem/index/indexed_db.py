@@ -614,6 +614,8 @@ class IndexedDb:
     ) -> Iterator[tuple[int, float, str]]:
         """Yields candidate fragments that match both an ms1 and an ms2 range.
 
+        Nore: MS1 range is ignored when the database has been pre-filtered.
+
         Parameters
         ----------
         ms2_range : tuple[float, float]
@@ -631,6 +633,7 @@ class IndexedDb:
         precursor_mz: float | tuple[float, float],
         spec_mz: Iterable[float],
         spec_int: Iterable[float],
+        constrain_ids: set[int] | None,
     ) -> DataFrame:
         """Scores a spectrum against the index.
 
@@ -647,6 +650,8 @@ class IndexedDb:
             The m/z values of the spectrum.
         spec_int : Iterable[float]
             The intensity values of the spectrum.
+        constrain_ids : set[int], optional
+            A set of integers that constrin what candidates can be considered.
         """
         # TDOO: make this a config option
         MIN_PEAKS = 3  # noqa
@@ -683,6 +688,9 @@ class IndexedDb:
 
             for seq, frag, series in candidates:
                 # Should tolerances be checked here?
+                if (constrain_ids is not None) and (seq not in constrain_ids):
+                    continue
+
                 dm = frag - fragment_mz
                 if abs(dm) <= ms2_tol:
                     peaks.append(
@@ -726,6 +734,7 @@ class IndexedDb:
         spec_mz: NDArray[np.float32],
         spec_int: NDArray[np.float32],
         top_n: int = 100,
+        constrain_ids: set[int] | None = None,
     ) -> DataFrame:
         """Score a spectrum against the index.
 
@@ -742,6 +751,8 @@ class IndexedDb:
             The intensity values of the spectrum.
         top_n : int, optional
             The number of top scoring peptides to return, by default 100
+        constrain_ids : set[int], optional
+            A set of integers that constrin what candidates can be considered.
 
         Returns
         -------
@@ -750,7 +761,10 @@ class IndexedDb:
         """
         assert len(self.seq_ids) == len(self.seqs)
         scores = self.score_arrays(
-            precursor_mz=precursor_mz, spec_mz=spec_mz, spec_int=spec_int
+            precursor_mz=precursor_mz,
+            spec_mz=spec_mz,
+            spec_int=spec_int,
+            constrain_ids=constrain_ids,
         )
 
         if scores is None or len(scores) == 0:
@@ -832,11 +846,15 @@ class IndexedDb:
         out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
         out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
 
+        target_set = chunk_seq_df.select(["seq_proforma", "decoy"]).collect()
         target_set = set(
-            chunk_seq_df.filter(pl.col("decoy") is False)
-            .select(["seq_proforma"])
-            .collect()["seq_proforma"]
+            target_set["seq_proforma"].to_numpy()[
+                np.invert(target_set["decoy"].to_numpy())
+            ]
         )
+
+        if len(target_set) == 0:
+            logger.warning(f"No targets were found in range {min_mz}-{max_mz}")
         out.target_proforma = target_set
         return out
 

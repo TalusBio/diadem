@@ -420,7 +420,9 @@ class PrefilteredMS1BucketList:
 
     # @profile
     def yield_candidates(
-        self, ms2_range: tuple[float, float], ms1_range: tuple[float, float]
+        self,
+        ms2_range: tuple[float, float],
+        ms1_range: tuple[float, float],
     ) -> Iterator[tuple[int, float, str]]:
         """Yields fragments that match the passed masses.
 

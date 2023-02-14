@@ -25,7 +25,7 @@ MassError = Literal["da", "ppm"]
 
 @dataclass(frozen=True, eq=True)
 class DiademConfig:  # noqa
-    g_tolerances: tuple[float, ...] = field(default=(20, 10))
+    g_tolerances: tuple[float, ...] = field(default=(20, 20))
     g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
 
     peptide_length_range: tuple[int, int] = field(
@@ -43,7 +43,7 @@ class DiademConfig:  # noqa
         default="by",
     )
     ion_charges: tuple[int, ...] = field(
-        default=(1,),
+        default=(1, 2),
     )
     ion_mz_range: tuple[float, float] = field(
         default=(250, 2000.0),
@@ -70,14 +70,14 @@ class DiademConfig:  # noqa
     run_parallelism: int = -2
     run_deconvolute_spectra: bool = True
     run_min_peak_intensity: float = 100
-    run_debug_log_frequency: int = 20
-    run_allowed_fails: int = 500
+    run_debug_log_frequency: int = 50
+    run_allowed_fails: int = 200
     run_window_size: int = 21
     run_max_peaks_per_window: int = 150
 
     # Min intensity to consider for matching and extracting
-    run_min_intensity_ratio: float = 0.011
-    run_min_correlation_score: float = 0.25
+    run_min_intensity_ratio: float = 0.01
+    run_min_correlation_score: float = 0.2
 
     run_scaling_ratio = 0.01
     run_scalin_limits: tuple[float, float] = (0.01, 0.999)

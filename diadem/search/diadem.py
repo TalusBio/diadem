@@ -9,6 +9,7 @@ import pandas as pd
 import uniplot
 from joblib import Parallel, delayed
 from loguru import logger
+from ms2ml.utils.mz_utils import get_tolerance
 from pandas import DataFrame
 from tqdm.auto import tqdm
 
@@ -122,11 +123,24 @@ def search_group(
         )
 
         if new_stack.ref_fwhm >= 3:
+            ms2_tol = get_tolerance(
+                config.g_tolerances[1],
+                theoretical=new_stack.ref_mz,
+                unit=config.g_tolerance_units[1],
+            )
+
+            ref_ids = db.bucketlist.yield_candidates(
+                ms1_range=group.precursor_range,
+                ms2_range=(new_stack.ref_mz - ms2_tol, new_stack.ref_mz + ms2_tol),
+            )
+            ref_ids = {x[0] for x in ref_ids}
+
             scores = db.hyperscore(
                 precursor_mz=group.precursor_range,
                 spec_int=scoring_intensities,
                 spec_mz=new_stack.mzs,
                 top_n=1,
+                constrain_ids=ref_ids,
             )
         else:
             scores = None
@@ -276,9 +290,7 @@ def diadem_main(
     results: pd.DataFrame = pd.concat(results, ignore_index=True)
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
-    prefix_dir = Path(prefix).absolute()
-
-    prefix_dir.parent.mkdir(exist_ok=True)
+    Path(prefix).absolute().parent.mkdir(exist_ok=True)
 
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)

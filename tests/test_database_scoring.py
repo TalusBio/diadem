@@ -29,6 +29,7 @@ def test_fasta_shows_in_db(shared_datadir):
 
         ms1_range = (s.mz - 10, s.mz + 10)
         score_df = db.hyperscore(ms1_range, spec_mz=mzs, spec_int=intens, top_n=2)
+        score_df = score_df[np.invert(score_df["decoy"])]
         assert s.to_proforma() in list(
             score_df["Peptide"]
         ), f"Peptide i={i} {s.to_proforma()} not in db"
