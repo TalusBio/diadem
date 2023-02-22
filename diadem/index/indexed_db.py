@@ -269,7 +269,7 @@ class IndexedDb:
             config=self.config.ms2ml_config,
             only_unique=True,
             enzyme=self.config.db_enzyme,
-            missed_cleavages=1,
+            missed_cleavages=self.config.db_max_missed_cleavages,
             allow_modifications=False,
             out_hook=ms1_filter,
         )
@@ -480,10 +480,18 @@ class IndexedDb:
                 miniters=one_pct,
             )
 
-            frag_mzs, frag_series, prec_mzs, prec_seqs, num_frags = zip(
-                *(self.seq_properties(x) for x in iter_seqs)
-            )
+            seq_props = []
+            seen_seqs = set()
 
+            for x in iter_seqs:
+                prop = self.seq_properties(x)
+                if prop.proforma_seq in seen_seqs:
+                    continue
+                else:
+                    seen_seqs.add(prop.proforma_seq)
+                    seq_props.append(prop)
+
+            frag_mzs, frag_series, prec_mzs, prec_seqs, num_frags = zip(*seq_props)
             # NOTE: Changing to float16 does not give the correct result
             prec_mzs = np.array(prec_mzs, dtype="float32")
             prec_seqs = np.array(prec_seqs, dtype="object")
@@ -790,6 +798,7 @@ class IndexedDb:
 
         scores["Peptide"] = self.seqs[indices_seqs_local]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
+        assert len(np.unique(scores["Peptide"])) == len(scores)
 
         return scores
 
@@ -819,6 +828,7 @@ class IndexedDb:
                 chunk_seq_df.select(["seq_id", "seq_mz"]), on="seq_id", how="inner"
             )
             .sort(pl.col("mz"))
+            .unique()
             .collect()
         )
 
@@ -841,7 +851,7 @@ class IndexedDb:
         out.prefiltered_ms1 = True
         # TODO change it so the only required section
         # is the proforma seqs that are in the mz range
-        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).collect()
+        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).unique().collect()
         out.seq_prec_mzs = chunk_seq_df_coll["seq_mz"].to_numpy()
         out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
         out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
@@ -867,7 +877,8 @@ def db_from_fasta(
     It internally checks the existance of a cache in the form of an sqlite file.
     Future implementations will allow cahching in the form of parquet.
     """
-    config_hash = config.hash()
+    index_config = config.index_config
+    config_hash = index_config.hash()
     file_cache = file_cache_dir(file=fasta)
     curr_cache = file_cache / config_hash
 

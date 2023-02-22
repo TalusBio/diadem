@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import time
+from os import PathLike
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,7 @@ def search_group(
     # Results and stats related variables
     group_results = []
     intensity_log = []
+    score_log = []
     index_log = []
     fwhm_log = []
     num_peaks = 0
@@ -146,6 +148,7 @@ def search_group(
             scores = None
 
         if scores is not None:
+            score_log.append(scores["Score"].max())
             scores["id"] = match_id
             ref_peak_mz = new_stack.mzs[new_stack.ref_index]
 
@@ -220,6 +223,7 @@ def search_group(
     plot_to_log(
         np.log1p(np.array(intensity_log)), title="Max (log) intensity over time"
     )
+    plot_to_log(np.array(score_log), title="Score over time")
     plot_to_log(np.array(index_log), title="Requested index over time")
     plot_to_log(np.array(fwhm_log), title="FWHM across time")
     logger.info(
@@ -275,16 +279,31 @@ def diadem_main(
             group_results = search_group(group=group, db=group_db, config=config)
             results.append(group_results)
     else:
+
+        @delayed
+        def setup_db_and_search(
+            precursor_range: tuple[float, float],
+            db: IndexedDb,
+            cache_location: PathLike,
+            config: DiademConfig,
+            group: ScanGroup,
+        ) -> DataFrame:
+            pfdb = db.index_prefiltered_from_parquet(cache_location, *precursor_range)
+            results = search_group(group=group, db=pfdb, config=config)
+            return results
+
         with Parallel(n_jobs=config.run_parallelism) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
             precursor_ranges = [group.precursor_range for group in groups]
-            dbs = workerpool(
-                delayed(db.index_prefiltered_from_parquet)(cache, *prange)
-                for prange in precursor_ranges
-            )
             results = workerpool(
-                delayed(search_group)(group=group, db=pfdb, config=config)
-                for group, pfdb in zip(groups, dbs)
+                setup_db_and_search(
+                    precursor_range=prange,
+                    db=db,
+                    cache_location=cache,
+                    config=config,
+                    group=group,
+                )
+                for group, prange in zip(groups, precursor_ranges)
             )
 
     results: pd.DataFrame = pd.concat(results, ignore_index=True)

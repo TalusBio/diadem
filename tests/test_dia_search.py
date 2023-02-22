@@ -7,7 +7,7 @@ from diadem.config import DiademConfig
 from diadem.search.diadem import diadem_main
 
 
-@pytest.mark.parametrize("parallel", [True, False], ids=["Parallel", "NoParallel"])
+@pytest.mark.parametrize("parallel", [False, True], ids=["NoParallel", "Parallel"])
 def test_dia_search_works(tmpdir, shared_datadir, parallel):
     """Uses simulated data to test diadem.
 
