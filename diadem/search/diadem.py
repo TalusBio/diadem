@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import time
+from os import PathLike
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +14,10 @@ from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
+from diadem.data_io import read_raw_data
+from diadem.data_io.mzml import ScanGroup, StackedChromatograms
+from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
-from diadem.mzml import ScanGroup, SpectrumStacker, StackedChromatograms
 from diadem.search.search_utils import make_pin
 
 
@@ -30,7 +33,10 @@ def plot_to_log(*args, **kwargs) -> None:  # noqa
 
 # @profile
 def search_group(
-    group: ScanGroup, db: IndexedDb, config: DiademConfig, progress: bool = True
+    group: ScanGroup | TimsScanGroup,
+    db: IndexedDb,
+    config: DiademConfig,
+    progress: bool = True,
 ) -> DataFrame:
     """Search a group of scans.
 
@@ -59,9 +65,36 @@ def search_group(
     MS2_TOLERANCE = config.g_tolerances[1]  # noqa
     MS2_TOLERANCE_UNIT = config.g_tolerance_units[1]  # noqa
 
+    IMS_TOLERANCE = config.g_ims_tolerance  # noqa
+    IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
+
+    new_window_kwargs = {
+        "window": WINDOWSIZE,
+        "min_intensity_ratio": MIN_INTENSITY_RATIO,
+        "min_correlation": MIN_CORR_SCORE,
+        "mz_tolerance": MS2_TOLERANCE,
+        "mz_tolerance_unit": MS2_TOLERANCE_UNIT,
+        "max_peaks": WINDOW_MAX_PEAKS,
+    }
+
+    if hasattr(group, "imss"):
+        logger.info("Detected a diaPASEF dataset")
+        new_window_kwargs.update(
+            {
+                "ims_tolerance": IMS_TOLERANCE,
+                "ims_tolerance_unit": IMS_TOLERANCE_UNIT,
+            }
+        )
+        stack_getter = TimsStackedChromatograms.from_group
+
+    else:
+        logger.info("No IMS detected")
+        stack_getter = StackedChromatograms.from_group
+
     # Results and stats related variables
     group_results = []
     intensity_log = []
+    score_log = []
     index_log = []
     fwhm_log = []
     num_peaks = 0
@@ -84,14 +117,8 @@ def search_group(
             )
             break
 
-        new_stack: StackedChromatograms = group.get_highest_window(
-            window=WINDOWSIZE,
-            min_intensity_ratio=MIN_INTENSITY_RATIO,
-            min_correlation=MIN_CORR_SCORE,
-            tolerance=MS2_TOLERANCE,
-            tolerance_unit=MS2_TOLERANCE_UNIT,
-            max_peaks=WINDOW_MAX_PEAKS,
-        )
+        new_stack: StackedChromatograms | TimsStackedChromatograms
+        new_stack = group.get_highest_window(**new_window_kwargs)
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
 
@@ -132,6 +159,7 @@ def search_group(
             scores = None
 
         if scores is not None:
+            score_log.append(scores["Score"].max())
             scores["id"] = match_id
             ref_peak_mz = new_stack.mzs[new_stack.ref_index]
 
@@ -144,7 +172,6 @@ def search_group(
 
             # Scale based on the inverse of the reference chromatogram
             normalized_trace = new_stack.ref_trace / new_stack.ref_trace.max()
-            # scaling = SCALING_RATIO * (1-normalized_trace)
             scaling = 1 - normalized_trace
             # Since depending on the sampling rate the peak might be very assymetrical,
             # for now I am not mirroring the scaling
@@ -162,15 +189,10 @@ def search_group(
 
             if (num_peaks % DEBUG_FREQUENCY) == 0:
                 before = new_stack.ref_trace.copy()
-                s = StackedChromatograms.from_group(
+                s = stack_getter(
                     group=group,
                     index=new_stack.parent_index,
-                    window=WINDOWSIZE,
-                    tolerance=db.config.g_tolerances[1],
-                    tolerance_unit=db.config.g_tolerance_units[1],
-                    min_intensity_ratio=MIN_INTENSITY_RATIO,
-                    min_correlation=MIN_CORR_SCORE,
-                    max_peaks=MAX_PEAKS,
+                    **new_window_kwargs,
                 )
                 plot_to_log(
                     [before, s.ref_trace],
@@ -184,7 +206,7 @@ def search_group(
 
             group_results.append(scores.copy())
         else:
-            logger.info(f"{match_id} did not match any peptides, scaling and skipping")
+            logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
             scaling = SCALING_RATIO * np.ones_like(new_stack.ref_trace)
             group.scale_window_intensities(
                 index=new_stack.parent_index,
@@ -196,6 +218,14 @@ def search_group(
             num_fails += 1
 
         num_peaks += 1
+        pbar.set_postfix(
+            {
+                "last_id": last_id,
+                "max_intensity": curr_highest_peak_int,
+                "num_fails": num_fails,
+                "num_scores": len(group_results),
+            }
+        )
         pbar.update(1)
         if (num_peaks % DEBUG_FREQUENCY) == 0:
             logger.debug(
@@ -206,6 +236,7 @@ def search_group(
     plot_to_log(
         np.log1p(np.array(intensity_log)), title="Max (log) intensity over time"
     )
+    plot_to_log(np.array(score_log), title="Score over time")
     plot_to_log(np.array(index_log), title="Requested index over time")
     plot_to_log(np.array(fwhm_log), title="FWHM across time")
     logger.info(
@@ -221,7 +252,7 @@ def search_group(
 # @profile
 def diadem_main(
     fasta_path: Path | str,
-    mzml_path: Path | str,
+    data_path: Path | str,
     config: DiademConfig,
     out_prefix: str = "",
 ) -> None:
@@ -231,8 +262,8 @@ def diadem_main(
     ----------
     fasta_path : Path | str
         Path to the fasta file
-    mzml_path : Path | str
-        Path to the mzml file
+    data_path : Path | str
+        Path to the mzml file or .d directory.
     config : DiademConfig
         Configuration object to use for the run.
     out_prefix : str, optional
@@ -248,8 +279,8 @@ def diadem_main(
     )
 
     # set up mzml file
-    ss = SpectrumStacker(
-        mzml_file=mzml_path,
+    ss = read_raw_data(
+        filepath=data_path,
         config=config,
     )
 
@@ -261,24 +292,37 @@ def diadem_main(
             group_results = search_group(group=group, db=group_db, config=config)
             results.append(group_results)
     else:
+
+        @delayed
+        def setup_db_and_search(
+            precursor_range: tuple[float, float],
+            db: IndexedDb,
+            cache_location: PathLike,
+            config: DiademConfig,
+            group: ScanGroup,
+        ) -> DataFrame:
+            pfdb = db.index_prefiltered_from_parquet(cache_location, *precursor_range)
+            results = search_group(group=group, db=pfdb, config=config)
+            return results
+
         with Parallel(n_jobs=config.run_parallelism) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
             precursor_ranges = [group.precursor_range for group in groups]
-            dbs = workerpool(
-                delayed(db.index_prefiltered_from_parquet)(cache, *prange)
-                for prange in precursor_ranges
-            )
             results = workerpool(
-                delayed(search_group)(group=group, db=pfdb, config=config)
-                for group, pfdb in zip(groups, dbs)
+                setup_db_and_search(
+                    precursor_range=prange,
+                    db=db,
+                    cache_location=cache,
+                    config=config,
+                    group=group,
+                )
+                for group, prange in zip(groups, precursor_ranges)
             )
 
     results: pd.DataFrame = pd.concat(results, ignore_index=True)
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
-    prefix_dir = Path(prefix).absolute()
-
-    prefix_dir.parent.mkdir(exist_ok=True)
+    Path(prefix).absolute().parent.mkdir(exist_ok=True)
 
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
@@ -286,7 +330,7 @@ def diadem_main(
     make_pin(
         results,
         fasta_path=fasta_path,
-        mzml_path=mzml_path,
+        mzml_path=data_path,
         pin_path=prefix + ".tsv.pin",
     )
 

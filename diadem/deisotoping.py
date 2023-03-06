@@ -28,6 +28,7 @@ def deisotope(
     max_charge: int,
     diff: float,
     unit: str,
+    track_indices: bool = False,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
     """Deisotopes the passed spectra.
 
@@ -45,6 +46,17 @@ def deisotope(
         Tolerance to use when searching (typically 20 for ppm or 0.02 for da)
     unit, str
         Unit for the diff. ppm or da
+    track_indices, bool
+        Whether to return the indices of the combined indices as well.
+
+    Examples
+    --------
+    >>> my_mzs = [800.9, 803.408, 804.4108, 805.4106]
+    >>> my_intens = [1-(0.1*i) for i,_ in enumerate(my_mzs)]
+    >>> deisotope(my_mzs, my_intens, max_charge=2, diff=5.0, unit="ppm")
+    (array([800.9  , 803.408]), array([1. , 2.4]))
+    >>> deisotope(my_mzs, my_intens, max_charge=2, diff=5.0, unit="ppm", track_indices=True)
+    (array([800.9  , 803.408]), array([1. , 2.4]), ([0], [1, 2, 3]))
     """
     if unit.lower() == "da":
 
@@ -61,6 +73,8 @@ def deisotope(
         {"mz": mz, "intensity": intensity, "envelope": None, "charge": None}
         for mz, intensity in peaks
     ]
+    for i in range(len(peaks)):
+        peaks[i]["indices"] = [i]
 
     for i in range(len(mz) - 1, -1, -1):
         j = i - 1
@@ -69,8 +83,12 @@ def deisotope(
             tol = mass_unit_fun(mz[i], diff)
             for charge in range(1, max_charge + 1):
                 iso = NEUTRON / charge
+                # Note, this assumes that the isotope envelope always decreases in
+                # intensity, which is not accurate for high mol weight fragments.
                 if abs(delta - iso) <= tol and inten[i] < inten[j]:
                     peaks[j]["intensity"] += peaks[i]["intensity"]
+                    if track_indices:
+                        peaks[j]["indices"].extend(peaks[i]["indices"])
                     if peaks[i]["charge"] and peaks[i]["charge"] != charge:
                         continue
                     peaks[j]["charge"] = charge
@@ -79,6 +97,8 @@ def deisotope(
             j -= 1
 
     peaks = _filter_peaks(peaks)
+    if not track_indices:
+        peaks = peaks[0:2]
     return peaks
 
 
@@ -90,9 +110,11 @@ def _filter_peaks(peaks: dict) -> tuple[NDArray[np.float32], NDArray[np.float32]
     It filters the ones that are not assigned to be in an envelope,
     thus keeping only monoisotopic peaks.
     """
-    peaktuples = [(x["mz"], x["intensity"]) for x in peaks if x["envelope"] is None]
+    peaktuples = [
+        (x["mz"], x["intensity"], x["indices"]) for x in peaks if x["envelope"] is None
+    ]
     if len(peaktuples) == 0:
-        mzs, ints = [], []
+        mzs, ints, inds = [], [], []
     else:
-        mzs, ints = zip(*peaktuples)
-    return np.array(mzs), np.array(ints)
+        mzs, ints, inds = zip(*peaktuples)
+    return np.array(mzs), np.array(ints), inds

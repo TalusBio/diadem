@@ -215,11 +215,21 @@ class IndexedDb:
         value : list[Peptide]
             A list of peptide objects to set as the targets for the database.
         """
+        seen = set()
+        use = []
+        # Since right now my peptide implementation is not hashable,
+        # this needs to be done to make sure all targets are unique.
         for x in value:
             x.config = self.ms2ml_config
-        self._targets = value
+            if (proforma := x.to_proforma()) in seen:
+                continue
+            else:
+                use.append(x)
+                seen.add(proforma)
+
+        self._targets = use
         self._decoys = None
-        self.target_proforma = {x.to_proforma() for x in value}
+        self.target_proforma = {x.to_proforma() for x in use}
 
     @property
     def decoys(self) -> list[Peptide]:
@@ -269,12 +279,12 @@ class IndexedDb:
             config=self.config.ms2ml_config,
             only_unique=True,
             enzyme=self.config.db_enzyme,
-            missed_cleavages=1,
+            missed_cleavages=self.config.db_max_missed_cleavages,
             allow_modifications=False,
             out_hook=ms1_filter,
         )
-        sequences = list(adapter.parse())
-        self.targets = sequences
+        sequences = adapter.parse()
+        self.targets = list(sequences)
 
     def prefilter_ms1(
         self, ms1_range: tuple[float, float], num_decimals: int = 3
@@ -457,11 +467,13 @@ class IndexedDb:
 
         Usage
         -----
-            > db = IndexedDb(...)
-            > db.targets = [Peptide(...), Peptide(...)]
+        ```
+            db = IndexedDb(...)
+            db.targets = [Peptide(...), Peptide(...)]
             or
-            > db.targets_from_fasta(...)
-            > db.index_from_sequences()
+            db.targets_from_fasta(...)
+            db.index_from_sequences()
+        ```
 
         Note:
         ----
@@ -545,8 +557,18 @@ class IndexedDb:
         also have to be the same.
 
         """
-        assert len(prec_mzs) == len(prec_seqs)
-        assert all(len(frag_mzs) == len(x) for x in [frag_series, frag_to_prec_ids])
+        if not len(prec_mzs) == len(prec_seqs):
+            raise ValueError(
+                "The length of the precursor mzs and the precursor sequences needs to"
+                " be the same."
+            )
+        if not all(len(frag_mzs) == len(x) for x in [frag_series, frag_to_prec_ids]):
+            raise ValueError(
+                "The length of the frag_mz, frag_series and frag_to_prec_ids need to be"
+                " the same"
+            )
+        if not len(prec_seqs) == len(np.unique(prec_seqs)):
+            raise ValueError("All precursor sequences need to be unique!")
 
         # Sorted externally by ms2 mz
         with disabled_gc():
@@ -613,6 +635,8 @@ class IndexedDb:
         ms1_range: tuple[float, float],
     ) -> Iterator[tuple[int, float, str]]:
         """Yields candidate fragments that match both an ms1 and an ms2 range.
+
+        Nore: MS1 range is ignored when the database has been pre-filtered.
 
         Parameters
         ----------
@@ -776,6 +800,14 @@ class IndexedDb:
 
         scores["Peptide"] = self.seqs[indices_seqs_local]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
+        try:
+            assert len(np.unique(scores["Peptide"])) == len(scores), np.unique(
+                scores["Peptide"], return_counts=True
+            )
+        except AssertionError:
+            # There is a bug that gets detected here where a single peptide gets
+            # scored multiple times ... Usually with different IDs
+            breakpoint()
 
         return scores
 
@@ -805,6 +837,7 @@ class IndexedDb:
                 chunk_seq_df.select(["seq_id", "seq_mz"]), on="seq_id", how="inner"
             )
             .sort(pl.col("mz"))
+            .unique()
             .collect()
         )
 
@@ -827,16 +860,20 @@ class IndexedDb:
         out.prefiltered_ms1 = True
         # TODO change it so the only required section
         # is the proforma seqs that are in the mz range
-        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).collect()
+        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).unique().collect()
         out.seq_prec_mzs = chunk_seq_df_coll["seq_mz"].to_numpy()
         out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
         out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
 
+        target_set = chunk_seq_df.select(["seq_proforma", "decoy"]).collect()
         target_set = set(
-            chunk_seq_df.filter(pl.col("decoy") is False)
-            .select(["seq_proforma"])
-            .collect()["seq_proforma"]
+            target_set["seq_proforma"].to_numpy()[
+                np.invert(target_set["decoy"].to_numpy())
+            ]
         )
+
+        if len(target_set) == 0:
+            logger.warning(f"No targets were found in range {min_mz}-{max_mz}")
         out.target_proforma = target_set
         return out
 
@@ -849,7 +886,8 @@ def db_from_fasta(
     It internally checks the existance of a cache in the form of an sqlite file.
     Future implementations will allow cahching in the form of parquet.
     """
-    config_hash = config.hash()
+    index_config = config.index_config
+    config_hash = index_config.hash()
     file_cache = file_cache_dir(file=fasta)
     curr_cache = file_cache / config_hash
 

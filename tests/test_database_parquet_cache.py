@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from diadem.config import DiademConfig
@@ -27,3 +28,6 @@ def test_parquet_generation(shared_datadir, tmpdir, sample_peaks):
     mzs, ints, z2_mass = sample_peaks
     scores = db.hyperscore(z2_mass, mzs, ints)
     assert "VPQVSTPTLVEVSR/2" in set(scores["Peptide"])
+
+    pep_scores = scores[scores["Peptide"] == "VPQVSTPTLVEVSR/2"]
+    assert all(np.invert(pep_scores["decoy"]))

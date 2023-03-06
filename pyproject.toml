@@ -10,7 +10,7 @@ authors = [
     {name = "Carollyn Allen", email = "callen@talus.bio"},
 ]
 description = "A modular, feature-centric toolkit for DIA proteomics"
-requires-python = ">=3.9,<=3.12"
+requires-python = ">=3.9,<3.11"
 keywords = ["proteomics", "dia", "mass spec"]
 license = {text = "Apache 2.0"}
 classifiers = [
@@ -22,8 +22,7 @@ classifiers = [
 dependencies = [
     "pandas >= 1.5.2",
     "numpy >= 1.23.5",
-    # "ms2ml >= 0.0.33",
-    "ms2ml >= 0.0.31",
+    "ms2ml >= 0.0.33",
     "tqdm >= 4.64.1",
     "loguru >= 0.6.0",
     "rich-click >= 1.6.0",
@@ -31,12 +30,14 @@ dependencies = [
     "pyarrow >= 10.0.1",
     "platformdirs >= 2.6.0",
     "joblib >= 1.2.0",
-    # Deisotoping
-    "brain-isotopic-distribution >= 1.5.11",
-    "ms-peak-picker >= 0.1.40",
-    "ms-deisotope >= 0.0.46",
+    "alphatims >= 1.0.6",
+    "hdf5plugin",
+    "polars >= 0.16.9",
 ]
 dynamic = ["version"]
+
+[project.scripts]
+diadem = "diadem.cli:main_cli"
 
 [project.readme]
 file = "README.md"
@@ -54,6 +55,12 @@ test = [
 ]
 profiling = [
     "line_profiler",
+]
+dev = [
+    "ruff",
+    "black",
+    "isort",
+    "pylance",
 ]
 
 

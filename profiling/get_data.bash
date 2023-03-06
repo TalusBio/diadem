@@ -8,3 +8,6 @@ curl ftp.pride.ebi.ac.uk/pride/data/archive/2022/02/PXD028735/LFQ_timsTOFPro_dia
 gunzip ./profiling_data/*.gz
 for i in  ./profiling_data/*.zip ; do unzip $i ; done
 mv LFQ_timsTOFPro_* ./profiling_data/.
+
+curl https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/Bacteria/UP000000625/UP000000625_83333.fasta.gz --output ./profiling_data/UP000000625_83333.fasta.gz
+gunzip ./profiling_data/UP000000625_83333.fasta.gz

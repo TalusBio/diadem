@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import sys
 from argparse import Namespace
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Literal
 
 import tomli_w
@@ -24,9 +24,13 @@ MassError = Literal["da", "ppm"]
 
 
 @dataclass(frozen=True, eq=True)
-class DiademConfig:  # noqa
-    g_tolerances: tuple[float, ...] = field(default=(20, 10))
-    g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
+class DiademIndexConfig:
+    """Configuration to generate an index.
+
+    Base class for the diadem index, this is mean to contain the configuration
+    options relevant to generate the index, and should not have parameters that
+    are used at runtime (index gen vs index use).
+    """
 
     peptide_length_range: tuple[int, int] = field(
         default=(7, 25),
@@ -43,7 +47,7 @@ class DiademConfig:  # noqa
         default="by",
     )
     ion_charges: tuple[int, ...] = field(
-        default=(1,),
+        default=(1, 2),
     )
     ion_mz_range: tuple[float, float] = field(
         default=(250, 2000.0),
@@ -55,50 +59,6 @@ class DiademConfig:  # noqa
 
     # Variable mods
     # Static mods
-
-    # Main score
-    # Currently unused ...
-    scoring_score_function: ScoringFunctions = "Hyperscore"
-
-    run_max_peaks: int = 1e6
-
-    # the 5k number comes from the neviskii lab paper on deisotoping
-    run_max_peaks_per_spec: int = 5_000
-
-    # Prallelism 1 means no parallelism, -1 means all cores, any other positive
-    # integer means use that many cores.
-    run_parallelism: int = -2
-    run_deconvolute_spectra: bool = True
-    run_min_peak_intensity: float = 100
-    run_debug_log_frequency: int = 20
-    run_allowed_fails: int = 500
-    run_window_size: int = 21
-    run_max_peaks_per_window: int = 150
-
-    # Min intensity to consider for matching and extracting
-    run_min_intensity_ratio: float = 0.011
-    run_min_correlation_score: float = 0.25
-
-    run_scaling_ratio = 0.01
-    run_scalin_limits: tuple[float, float] = (0.01, 0.999)
-
-    @property
-    def ms2ml_config(self) -> Config:
-        """Returns the ms2ml config.
-
-        It exports all the parameters that are used inside of
-        ms2ml to its own configuration object.
-        """
-        conf = Config(
-            g_tolerances=self.g_tolerances,
-            g_tolerance_units=self.g_tolerance_units,
-            peptide_length_range=self.peptide_length_range,
-            precursor_charges=self.precursor_charges,
-            ion_series=self.ion_series,
-            ion_charges=self.ion_charges,
-            peptide_mz_range=self.peptide_mz_range,
-        )
-        return conf
 
     def log(self, logger: Logger, level: str = "INFO") -> None:
         """Logs all the configurations using the passed logger."""
@@ -158,11 +118,93 @@ class DiademConfig:  # noqa
 
         Example
         -------
-        >>> DiademConfig().hash()
-        '19922fcb81d81062169e5a677517e00b'
-        >>> DiademConfig(ion_series = "y").hash()
-        'a365384390de3ba5f448096a73155005'
+        >>> DiademIndexConfig().hash()
+        '1a23e68d04576bb73dbd5e0173679e64'
+        >>> DiademIndexConfig(ion_series = "y").hash()
+        '846dbaf6adb3e2ddc5779fc5169ec675'
         """
         h = hashlib.md5()
         h.update(tomli_w.dumps(self.toml_dict()).encode())
         return h.hexdigest()
+
+    @property
+    def ms2ml_config(self) -> Config:
+        """Returns the ms2ml config.
+
+        It exports all the parameters that are used inside of
+        ms2ml to its own configuration object.
+        """
+        conf = Config(
+            g_tolerances=[],
+            g_tolerance_units=[],
+            peptide_length_range=self.peptide_length_range,
+            precursor_charges=self.precursor_charges,
+            ion_series=self.ion_series,
+            ion_charges=self.ion_charges,
+            peptide_mz_range=self.peptide_mz_range,
+        )
+        return conf
+
+
+@dataclass(frozen=True, eq=True)
+class DiademConfig(DiademIndexConfig):  # noqa
+    g_tolerances: tuple[float, ...] = field(default=(20, 50))
+    g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
+
+    g_ims_tolerance: float = 0.05
+    g_ims_tolerance_unit: Literal["abs"] = "abs"
+    # Main score
+    # Currently unused ...
+    scoring_score_function: ScoringFunctions = "Hyperscore"
+
+    run_max_peaks: int = 1e6
+
+    # the 5k number comes from the neviskii lab paper on deisotoping
+    run_max_peaks_per_spec: int = 5_000
+
+    # Prallelism 1 means no parallelism, -1 means all cores, any other positive
+    # integer means use that many cores.
+    run_parallelism: int = -4
+    run_deconvolute_spectra: bool = True
+    run_min_peak_intensity: float = 100
+    run_debug_log_frequency: int = 50
+    run_allowed_fails: int = 700
+    run_window_size: int = 21
+    run_max_peaks_per_window: int = 150
+
+    # Min intensity to consider for matching and extracting
+    run_min_intensity_ratio: float = 0.01
+    run_min_correlation_score: float = 0.5
+
+    run_scaling_ratio = 0.001
+    run_scalin_limits: tuple[float, float] = (0.001, 0.999)
+
+    @property
+    def ms2ml_config(self) -> Config:
+        """Returns the ms2ml config.
+
+        It exports all the parameters that are used inside of
+        ms2ml to its own configuration object.
+        """
+        conf = Config(
+            g_tolerances=self.g_tolerances,
+            g_tolerance_units=self.g_tolerance_units,
+            peptide_length_range=self.peptide_length_range,
+            precursor_charges=self.precursor_charges,
+            ion_series=self.ion_series,
+            ion_charges=self.ion_charges,
+            peptide_mz_range=self.peptide_mz_range,
+        )
+        return conf
+
+    @property
+    def index_config(self) -> DiademIndexConfig:
+        """Generates an index config.
+
+        The index config is a subset of the DiademConfig.
+        Therefore generating this subset allow us to hash
+        it in a way that would identify the index generation.
+        """
+        self_dict = asdict(self)
+        kwargs = {x.name: self_dict[x.name] for x in fields(DiademIndexConfig)}
+        return DiademIndexConfig(**kwargs)

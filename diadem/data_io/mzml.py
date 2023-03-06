@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterator
 
 import numpy as np
 from joblib import Parallel, delayed
@@ -16,26 +16,10 @@ from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig, MassError
+from diadem.data_io.utils import slice_from_center, strictzip, xic
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
 from diadem.utils import check_sorted
-
-try:
-    zip([], [], strict=True)
-
-    def strictzip(*args: Iterable) -> Iterable:
-        """Like zip but checks that the length of all elements is the same."""
-        return zip(*args, strict=True)
-
-except TypeError:
-
-    def strictzip(*args: Iterable) -> Iterable:
-        """Like zip but checks that the length of all elements is the same."""
-        args = [list(arg) for arg in args]
-        lengs = {len(x) for x in args}
-        if len(lengs) > 1:
-            raise ValueError("All arguments need to have the same legnths")
-        return zip(*args)
 
 
 @dataclass
@@ -77,8 +61,8 @@ class ScanGroup:
         self,
         window: int,
         min_intensity_ratio: float,
-        tolerance: float,
-        tolerance_unit: str,
+        mz_tolerance: float,
+        mz_tolerance_unit: str,
         min_correlation: float,
         max_peaks: int,
     ) -> StackedChromatograms:
@@ -98,8 +82,8 @@ class ScanGroup:
             window=window,
             min_intensity_ratio=min_intensity_ratio,
             min_correlation=min_correlation,
-            tolerance=tolerance,
-            tolerance_unit=tolerance_unit,
+            mz_tolerance=mz_tolerance,
+            mz_tolerance_unit=mz_tolerance_unit,
             max_peaks=max_peaks,
         )
 
@@ -163,102 +147,6 @@ class ScanGroup:
         return len(self.intensities)
 
 
-# @profile
-def xic(
-    query_mz: NDArray[np.float32],
-    query_int: NDArray[np.float32],
-    mzs: NDArray[np.float32],
-    tolerance_unit: MassError = "da",
-    tolerance: float = 0.02,
-) -> tuple[NDArray[np.float32], list[list[int]]]:
-    """Gets the extracted ion chromatogram form arrays.
-
-    Gets the extracted ion chromatogram from the passed mzs and intensities
-    The output should be the same length as the passed mzs.
-
-    Returns
-    -------
-    NDArray[np.float32]
-        An array of length `len(mzs)` that integrates such masses in
-        the query_int (matching with the query_mz array ...)
-
-    list[list[int]]
-        A nested list of length `len(mzs)` where each sub-list contains
-        the indices of the `query_int` array that were integrated.
-
-    """
-    theo_mz_indices, obs_mz_indices = annotate_peaks(
-        theo_mz=mzs,
-        mz=query_mz,
-        tolerance=tolerance,
-        unit=tolerance_unit,
-    )
-
-    outs = np.zeros_like(mzs, dtype="float")
-    inds = []
-    for i in range(len(outs)):
-        query_indices = obs_mz_indices[theo_mz_indices == i]
-        ints_subset = query_int[query_indices]
-        if len(ints_subset) == 0:
-            inds.append([])
-        else:
-            outs[i] = np.sum(ints_subset)
-            inds.append(query_indices)
-
-    return outs, inds
-
-
-def slice_from_center(center: int, window: int, length: int) -> tuple[slice, int]:
-    """Generates a slice provided a center and window size.
-
-    Creates a slice that accounts for the endings of an iterable
-    in such way that the window size is maintained.
-
-    Examples
-    --------
-    >>> my_list = [0,1,2,3,4,5,6]
-    >>> slc, center_index = slice_from_center(
-    ...     center=4, window=3, length=len(my_list))
-    >>> slc
-    slice(3, 6, None)
-    >>> my_list[slc]
-    [3, 4, 5]
-    >>> my_list[slc][center_index] == my_list[4]
-    True
-
-    >>> slc = slice_from_center(1, 3, len(my_list))
-    >>> slc
-    (slice(0, 3, None), 1)
-    >>> my_list[slc[0]]
-    [0, 1, 2]
-
-    >>> slc = slice_from_center(6, 3, len(my_list))
-    >>> slc
-    (slice(4, 7, None), 2)
-    >>> my_list[slc[0]]
-    [4, 5, 6]
-    >>> my_list[slc[0]][slc[1]] == my_list[6]
-    True
-
-    """
-    start = center - (window // 2)
-    end = center + (window // 2) + 1
-    center_index = window // 2
-
-    if start < 0:
-        start = 0
-        end = window
-        center_index = center
-
-    if end >= length:
-        end = length
-        start = end - window
-        center_index = window - (length - center)
-
-    slice_q = slice(start, end)
-    return slice_q, center_index
-
-
 @dataclass
 class StackedChromatograms:
     """A class containing the elements of a stacked chromatogram.
@@ -279,7 +167,8 @@ class StackedChromatograms:
     base_peak_intensity :
         Intensity of the base peak in the reference spectrum
     stack_peak_indices :
-        List of indices used to stack the array, it is a list of dimensions [w]
+        List of indices used to stack the array, it is a list of dimensions [w],
+        where each element can be either a list of indices or an empty list.
 
     Details
     -------
@@ -373,8 +262,8 @@ class StackedChromatograms:
         group: ScanGroup,
         index: int,
         window: int = 21,
-        tolerance: float = 0.02,
-        tolerance_unit: MassError = "da",
+        mz_tolerance: float = 0.02,
+        mz_tolerance_unit: MassError = "da",
         min_intensity_ratio: float = 0.01,
         min_correlation: float = 0.5,
         max_peaks: int = 150,
@@ -389,9 +278,9 @@ class StackedChromatograms:
             The index of the spectrum to use as the reference
         window : int, optional
             The number of spectra to stack, by default 21
-        tolerance : float, optional
+        mz_tolerance : float, optional
             The tolerance to use when matching m/z values, by default 0.02
-        tolerance_unit : MassError, optional
+        mz_tolerance_unit : MassError, optional
             The unit of the tolerance, by default "da"
         min_intensity_ratio : float, optional
             The minimum intensity ratio to use when stacking, by default 0.01
@@ -434,8 +323,8 @@ class StackedChromatograms:
                     query_mz=m,
                     query_int=inten,
                     mzs=center_mzs,
-                    tolerance=tolerance,
-                    tolerance_unit=tolerance_unit,
+                    tolerance=mz_tolerance,
+                    tolerance_unit=mz_tolerance_unit,
                 )
             )
             if i == center_index:
