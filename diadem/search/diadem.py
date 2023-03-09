@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import uniplot
 from joblib import Parallel, delayed
 from loguru import logger
 from pandas import DataFrame
@@ -19,16 +18,7 @@ from diadem.data_io.mzml import ScanGroup, StackedChromatograms
 from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.search.search_utils import make_pin
-
-
-def plot_to_log(*args, **kwargs) -> None:  # noqa
-    """Plot to log.
-
-    Generates a plot of the passed data to the function.
-    All arguments are passed internally to uniplot.plot_to_string.
-    """
-    for line in uniplot.plot_to_string(*args, **kwargs):
-        logger.debug(line)
+from diadem.utils import plot_to_log
 
 
 # @profile
@@ -67,6 +57,7 @@ def search_group(
 
     IMS_TOLERANCE = config.g_ims_tolerance  # noqa
     IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
+    MAX_NUM_CONSECUTIVE_FAILS = 50
 
     new_window_kwargs = {
         "window": WINDOWSIZE,
@@ -101,10 +92,12 @@ def search_group(
 
     # Fail related variables
     num_fails = 0
+    num_consecutive_fails = 0
     curr_highest_peak_int = 2**30
     last_id = None
 
     pbar = tqdm(desc=f"Slice: {group.iso_window_name}", disable=not progress)
+    st = time.time()
 
     while True:
         if not (curr_highest_peak_int >= MIN_PEAK_INTENSITY and num_peaks <= MAX_PEAKS):
@@ -117,8 +110,17 @@ def search_group(
             )
             break
 
+        if num_consecutive_fails > MAX_NUM_CONSECUTIVE_FAILS:
+            logger.warning(
+                "Exiting with early termination due "
+                f"to consecurtive fails {num_consecutive_fails}"
+            )
+            group_results = group_results[:-num_consecutive_fails]
+            break
+
         new_stack: StackedChromatograms | TimsStackedChromatograms
         new_stack = group.get_highest_window(**new_window_kwargs)
+
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
 
@@ -159,7 +161,6 @@ def search_group(
             scores = None
 
         if scores is not None:
-            score_log.append(scores["Score"].max())
             scores["id"] = match_id
             ref_peak_mz = new_stack.mzs[new_stack.ref_index]
 
@@ -205,6 +206,8 @@ def search_group(
                 plot_to_log([scaling], title="Scaling")
 
             group_results.append(scores.copy())
+            score_log.append(scores["Score"].max())
+            num_consecutive_fails = 0
         else:
             logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
             scaling = SCALING_RATIO * np.ones_like(new_stack.ref_trace)
@@ -216,6 +219,7 @@ def search_group(
                 window_mzs=new_stack.mzs,
             )
             num_fails += 1
+            num_consecutive_fails += 1
 
         num_peaks += 1
         pbar.set_postfix(
@@ -227,10 +231,32 @@ def search_group(
             }
         )
         pbar.update(1)
-        if (num_peaks % DEBUG_FREQUENCY) == 0:
-            logger.debug(
-                f"peak {num_peaks}/{MAX_PEAKS} max ; Intensity {curr_highest_peak_int}"
+        if ((et := time.time()) - st) >= 2:
+            from ms2ml.utils.mz_utils import get_tolerance
+
+            tot_candidates = 0
+            for mz in new_stack.mzs:
+                ms2_tol = get_tolerance(
+                    MS2_TOLERANCE,
+                    theoretical=mz,
+                    unit=MS2_TOLERANCE_UNIT,
+                )
+
+                candidates = db.bucketlist.yield_candidates(
+                    ms1_range=group.precursor_range,
+                    ms2_range=(mz - ms2_tol, mz + ms2_tol),
+                )
+                for _ in candidates:
+                    tot_candidates += 1
+
+            logger.error(
+                f"Iteration took waaaay too long scores={scores} ;"
+                f" {tot_candidates} total candidates"
             )
+            logger.error(f"{new_stack.mzs.copy()}; len({len(new_stack.mzs)})")
+            st = et
+        else:
+            st = et
 
     pbar.close()
     plot_to_log(
@@ -245,7 +271,10 @@ def search_group(
         f"Intensity of the last scored peak {curr_highest_peak_int} "
         f"on index {last_id}"
     )
-    group_results = pd.concat(group_results)
+
+    if len(group_results) == 0:
+        logger.error("No results were accumulated in this group!")
+    group_results = pd.concat(group_results) if len(group_results) else None
     return group_results
 
 
@@ -319,7 +348,9 @@ def diadem_main(
                 for group, prange in zip(groups, precursor_ranges)
             )
 
-    results: pd.DataFrame = pd.concat(results, ignore_index=True)
+    results: pd.DataFrame = pd.concat(
+        [x for x in results if x is not None], ignore_index=True
+    )
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
     Path(prefix).absolute().parent.mkdir(exist_ok=True)

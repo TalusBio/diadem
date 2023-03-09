@@ -22,6 +22,7 @@ def ppm_to_delta_mass(obs: float, ppm: float) -> float:
 
 
 # Ported implementation from sage
+# @profile
 def deisotope(
     mz: NDArray[np.float32] | list[float],
     inten: NDArray[np.float32] | list[float],

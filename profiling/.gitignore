@@ -1,6 +1,11 @@
 
 diadem.csv
 diadem.parquet
+**diadem.csv
+**diadem.tsv.pin
+**diadem.parquet
 profiling_data/*
 line_profile*.txt
 profile*.txt
+
+**mokapot*.txt

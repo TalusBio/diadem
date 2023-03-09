@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import chain
+from os import PathLike
 from typing import Iterator, Literal
 
 import numpy as np
@@ -62,8 +64,8 @@ class TimsStackedChromatograms(StackedChromatograms):
 
     ref_ims: float
 
-    # @profile
     @staticmethod
+    # @profile
     def from_group(
         group: TimsScanGroup,
         index: int,
@@ -129,16 +131,12 @@ class TimsStackedChromatograms(StackedChromatograms):
         bp_intensity_index = np.argmax(center_intensities)
         bp_ims = center_ims[bp_intensity_index]
 
-        int_keep = center_intensities >= (
-            center_intensities.max() * min_intensity_ratio
-        )
         if ims_tolerance_unit != "abs":
             raise NotImplementedError()
-        ims_int_keep = np.abs(center_ims - bp_ims) <= ims_tolerance
-        int_keep = int_keep & ims_int_keep
+        ims_keep = np.abs(center_ims - bp_ims) <= ims_tolerance
 
-        center_mzs = center_mzs[int_keep]
-        center_intensities = center_intensities[int_keep]
+        center_mzs = center_mzs[ims_keep]
+        center_intensities = center_intensities[ims_keep]
 
         # TODO move this to its own helper function (collapse_unique ??)
         # ... Maybe even "proprocess_ims_spec(mzs, imss, ints, ref_ims, ...)"
@@ -161,6 +159,13 @@ class TimsStackedChromatograms(StackedChromatograms):
             diff=mz_tolerance,
             unit=mz_tolerance_unit,
             track_indices=True,
+        )
+        int_keep = du_center_intensities >= (
+            du_center_intensities.max() * min_intensity_ratio
+        )
+        du_center_mzs, du_center_intensities = (
+            du_center_mzs[int_keep],
+            du_center_intensities[int_keep],
         )
 
         xic_outs = []
@@ -311,10 +316,11 @@ class TimsScanGroup(ScanGroup):
 
 
 class TimsSpectrumStacker(SpectrumStacker):
-    def __init__(self, filepath: TimsTOF, config: DiademConfig) -> None:
-        self.datafile = TimsTOF(filepath)
+    def __init__(self, filepath: PathLike, config: DiademConfig) -> None:
+        self.filepath = filepath
         self.config = config
-        unique_precursor_indices = np.unique(self.datafile.precursor_indices)
+        with self.lazy_datafile() as datafile:
+            unique_precursor_indices = np.unique(datafile.precursor_indices)
         unique_precursor_indices = [x for x in unique_precursor_indices if x != 0]
 
         if "DEBUG_DIADEM" in os.environ:
@@ -325,52 +331,75 @@ class TimsSpectrumStacker(SpectrumStacker):
         else:
             self.unique_precursor_indices = unique_precursor_indices
 
+    @contextmanager
+    def lazy_datafile(self) -> TimsTOF:
+        """Reads the timstof data and yields it as context manager.
+
+        This is right now a bandaid to prevent the full TimsTOF object
+        to be stored in memmory for the whole lifetime of this class.
+        """
+        _datafile = TimsTOF(self.filepath)
+        yield _datafile
+        del _datafile
+
     def _precursor_iso_window_groups(
         self, precursor_index: int, progress: bool = True
     ) -> dict[str:TimsScanGroup]:
-        index_win_dicts = _get_precursor_index_windows(
-            self.datafile, precursor_index=precursor_index, progress=progress
-        )
-        out = {}
-
-        for k, v in index_win_dicts.items():
-            mzs = []
-            ints = []
-            imss = []
-
-            for vi in v:
-                new_order = np.argsort(vi["mz"])
-                mzs.append(vi["mz"][new_order])
-                ints.append(vi["intensity"][new_order])
-                imss.append(vi["ims"][new_order])
-
-            # TODO change this to a data structure that stores
-            # this only once.
-            quad_low = list({x["quad_low_mz_values"] for x in v})
-            quad_high = list({x["quad_high_mz_values"] for x in v})
-            assert len(quad_high) == 1
-            assert len(quad_low) == 1
-
-            bp_indices = np.array([np.argmax(x) for x in ints])
-            bp_ints = np.array([x1[x2] for x1, x2 in zip(ints, bp_indices)])
-            bp_mz = np.array([x1[x2] for x1, x2 in zip(mzs, bp_indices)])
-            # bp_ims = np.array([x1[x2] for x1, x2 in zip(imss, bp_indices)])
-            rts = np.array([x["rt_values_min"] for x in v])
-            scan_indices = [str(x["scan_indices"]) for x in v]
-
-            x = TimsScanGroup(
-                precursor_range=(quad_low[0], quad_high[0]),
-                mzs=mzs,
-                intensities=ints,
-                imss=imss,
-                base_peak_int=bp_ints,
-                base_peak_mz=bp_mz,
-                # base_peak_ims=bp_ims,
-                iso_window_name=k,
-                retention_times=rts,
-                scan_ids=scan_indices,
+        with self.lazy_datafile() as datafile:
+            index_win_dicts = _get_precursor_index_windows(
+                datafile, precursor_index=precursor_index, progress=progress
             )
-            out[k] = x
+            out = {}
+
+            for k, v in index_win_dicts.items():
+                mzs = []
+                ints = []
+                imss = []
+
+                for vi in v:
+                    new_order = np.argsort(vi["mz"])
+                    mzs.append(vi["mz"][new_order])
+                    ints.append(vi["intensity"][new_order])
+                    imss.append(vi["ims"][new_order])
+
+                # TODO change this to a data structure that stores
+                # this only once.
+                quad_low = list({x["quad_low_mz_values"] for x in v})
+                quad_high = list({x["quad_high_mz_values"] for x in v})
+                assert len(quad_high) == 1
+                assert len(quad_low) == 1
+
+                bp_indices = [np.argmax(x) if len(x) else None for x in ints]
+                bp_ints = np.array(
+                    [
+                        x1[x2] if x2 is not None else 0
+                        for x1, x2 in zip(ints, bp_indices)
+                    ]
+                )
+                bp_mz = np.array(
+                    [
+                        x1[x2] if x2 is not None else -1
+                        for x1, x2 in zip(mzs, bp_indices)
+                    ]
+                )
+                bp_indices = np.array(bp_indices)
+                # bp_ims = np.array([x1[x2] for x1, x2 in zip(imss, bp_indices)])
+                rts = np.array([x["rt_values_min"] for x in v])
+                scan_indices = [str(x["scan_indices"]) for x in v]
+
+                x = TimsScanGroup(
+                    precursor_range=(quad_low[0], quad_high[0]),
+                    mzs=mzs,
+                    intensities=ints,
+                    imss=imss,
+                    base_peak_int=bp_ints,
+                    base_peak_mz=bp_mz,
+                    # base_peak_ims=bp_ims,
+                    iso_window_name=k,
+                    retention_times=rts,
+                    scan_ids=scan_indices,
+                )
+                out[k] = x
 
         return out
 
@@ -412,6 +441,9 @@ def find_neighbors_mzsort(
     mz_tol_unit: MassError = "Da",
 ) -> dict[int : list[int]]:
     """Finds the neighbors of the most intense peaks.
+
+    It finds the neighboring peaks for the `top_n` most intense peaks
+    or the (TOTAL_PEAKS) * `top_n_pct` peaks, whichever is largest.
 
     Arguments:
     ---------
@@ -703,9 +735,9 @@ def get_break_indices(
 def _get_precursor_index_windows(
     dia_data: TimsTOF, precursor_index: int, progress: bool = True
 ) -> dict[dict[list]]:
-    PRELIM_N_PEAK_FILTER = 5000  # noqa
+    PRELIM_N_PEAK_FILTER = 10_000  # noqa
     MIN_INTENSITY_KEEP = 100  # noqa
-    MIN_NUM_SEED_BOXES = 500  # noqa
+    MIN_NUM_SEED_BOXES = 1000  # noqa
 
     inds = dia_data[{"precursor_indices": precursor_index}, "raw"]
     breaks, break_inds = get_break_indices(inds=inds)
@@ -738,8 +770,8 @@ def _get_precursor_index_windows(
         )
 
         start_len = len(peak_data["mz_values"])
-        keep_intens = peak_data["corrected_intensity_values"] > MIN_INTENSITY_KEEP
-        peak_data = {k: v[keep_intens] for k, v in peak_data.items()}
+        # keep_intens = peak_data["corrected_intensity_values"] > MIN_INTENSITY_KEEP
+        # peak_data = {k: v[keep_intens] for k, v in peak_data.items()}
 
         if len(peak_data["corrected_intensity_values"]) > PRELIM_N_PEAK_FILTER:
             partition_indices = np.argpartition(
@@ -758,14 +790,19 @@ def _get_precursor_index_windows(
             intensity_values=peak_data["corrected_intensity_values"],
             top_n=MIN_NUM_SEED_BOXES,
         )
+        filter = f["intensity"] > MIN_INTENSITY_KEEP
+        f = {k: v[filter] for k, v in f.items()}
         pct_compression = round(len(f["mz"]) / start_len, ndigits=2)
+        final_len = len(f["intensity"])
         pbar.set_postfix(
             {
                 "peaks": start_len,
-                "final_peaks": len(f["mz"]),
+                "f_peaks": final_len,
                 "pct": pct_compression,
                 "min": np.min(peak_data["corrected_intensity_values"]),
                 "max": np.max(peak_data["corrected_intensity_values"]),
+                "f_min": int(np.min(f["intensity"])) if final_len else 0,
+                "f_max": int(np.max(f["intensity"])) if final_len else 0,
             },
             refresh=False,
         )
@@ -779,6 +816,7 @@ def _get_precursor_index_windows(
     return quad_splits
 
 
+# @profile
 def collapse_seeds(
     seeds: dict[int, list[int]], intensity_values: NDArray[np.float64]
 ) -> tuple[dict[int, int], set[int]]:
@@ -813,6 +851,7 @@ def collapse_seeds(
     return out_seeds, taken
 
 
+# @profile
 def collapse_ims(
     ims_values,
     mz_values,
@@ -836,7 +875,12 @@ def collapse_ims(
     ambiguous = {k: v for k, v in neighborhoods.items() if len(v) > 1}
     seeds = {k: v for k, v in ambiguous.items() if len(v) > 5}
 
-    out_seeds, taken = collapse_seeds(seeds=seeds, intensity_values=intensity_values)
+    if seeds:
+        out_seeds, taken = collapse_seeds(
+            seeds=seeds, intensity_values=intensity_values
+        )
+    else:
+        out_seeds, taken = {}, set()
 
     ambiguous_untaken = list(set(ambiguous).difference(taken))
     unambiguous_out = {

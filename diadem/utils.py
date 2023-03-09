@@ -2,9 +2,20 @@ import gc
 from contextlib import contextmanager
 
 import numpy as np
+import uniplot
 from loguru import logger
 from ms2ml import Peptide
 from numpy.typing import NDArray
+
+
+def plot_to_log(*args, **kwargs) -> None:  # noqa
+    """Plot to log.
+
+    Generates a plot of the passed data to the function.
+    All arguments are passed internally to uniplot.plot_to_string.
+    """
+    for line in uniplot.plot_to_string(*args, **kwargs):
+        logger.debug(line)
 
 
 @contextmanager

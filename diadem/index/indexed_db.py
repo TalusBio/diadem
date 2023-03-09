@@ -283,8 +283,9 @@ class IndexedDb:
             allow_modifications=False,
             out_hook=ms1_filter,
         )
-        sequences = adapter.parse()
-        self.targets = list(sequences)
+        sequences = list(adapter.parse())
+        assert len(sequences) == len({x.to_proforma() for x in sequences})
+        self.targets = sequences
 
     def prefilter_ms1(
         self, ms1_range: tuple[float, float], num_decimals: int = 3
@@ -655,7 +656,7 @@ class IndexedDb:
         precursor_mz: float | tuple[float, float],
         spec_mz: Iterable[float],
         spec_int: Iterable[float],
-    ) -> DataFrame:
+    ) -> DataFrame | None:
         """Scores a spectrum against the index.
 
         The result is a data frame containing all generic data required to
@@ -807,7 +808,13 @@ class IndexedDb:
         except AssertionError:
             # There is a bug that gets detected here where a single peptide gets
             # scored multiple times ... Usually with different IDs
-            breakpoint()
+
+            # This issue happens when a sequence is also in the decoys
+            logger.error(
+                f"{scores} has multiple peptides with the "
+                "same id (ocasionally happens when it is both a "
+                "target and a decoy)"
+            )
 
         return scores
 

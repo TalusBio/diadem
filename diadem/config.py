@@ -148,10 +148,10 @@ class DiademIndexConfig:
 
 @dataclass(frozen=True, eq=True)
 class DiademConfig(DiademIndexConfig):  # noqa
-    g_tolerances: tuple[float, ...] = field(default=(20, 50))
+    g_tolerances: tuple[float, ...] = field(default=(20, 20))
     g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
 
-    g_ims_tolerance: float = 0.05
+    g_ims_tolerance: float = 0.03
     g_ims_tolerance_unit: Literal["abs"] = "abs"
     # Main score
     # Currently unused ...

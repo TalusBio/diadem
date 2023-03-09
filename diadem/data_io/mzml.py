@@ -19,7 +19,7 @@ from diadem.config import DiademConfig, MassError
 from diadem.data_io.utils import slice_from_center, strictzip, xic
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
-from diadem.utils import check_sorted
+from diadem.utils import check_sorted, plot_to_log
 
 
 @dataclass
@@ -56,6 +56,10 @@ class ScanGroup:
                 "Precursor mass range should have 2 elements,"
                 f" has {len(self.precursor_range)}"
             )
+        plot_to_log(
+            self.base_peak_int,
+            title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
+        )
 
     def get_highest_window(
         self,
@@ -139,6 +143,13 @@ class ScanGroup:
                     self.intensities[i][sim] = self.intensities[i][sim] * s
                 else:
                     continue
+
+            int_remove = self.intensities[i] < 10
+            if np.any(int_remove):
+                self.intensities[i] = self.intensities[i][np.invert(int_remove)]
+                self.mzs[i] = self.mzs[i][np.invert(int_remove)]
+                if hasattr(self, "imss"):
+                    self.imss[i] = self.imss[i][np.invert(int_remove)]
             self.base_peak_int[i] = np.max(self.intensities[i])
             self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
 

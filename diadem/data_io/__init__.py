@@ -13,7 +13,7 @@ def read_raw_data(
     It uses the file extension to know whether to dispatch the data to an
     mzML or timsTOF reader.
     """
-    if str(filepath).endswith(".d"):
+    if str(filepath).endswith(".d") or str(filepath).endswith("hdf"):
         rf = TimsSpectrumStacker(filepath=filepath, config=config)
     elif str(filepath).lower().endswith(".mzml"):
         rf = SpectrumStacker(filepath, config=config)
