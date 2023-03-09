@@ -324,10 +324,8 @@ class TimsSpectrumStacker(SpectrumStacker):
         unique_precursor_indices = [x for x in unique_precursor_indices if x != 0]
 
         if "DEBUG_DIADEM" in os.environ:
-            logger.error(
-                "RUNNING DIADEM IN DEBUG MODE (only the second precursor index)"
-            )
-            self.unique_precursor_indices = unique_precursor_indices[2:3]
+            logger.error("RUNNING DIADEM IN DEBUG MODE (only the 4th precursor index)")
+            self.unique_precursor_indices = unique_precursor_indices[3:4]
         else:
             self.unique_precursor_indices = unique_precursor_indices
 
@@ -430,6 +428,7 @@ class TimsSpectrumStacker(SpectrumStacker):
                 yield r
 
 
+# @profile
 def find_neighbors_mzsort(
     ims_vals: NDArray[np.float64],
     sorted_mz_values: NDArray[np.float64],
@@ -721,10 +720,6 @@ def get_break_indices(
     >>> get_break_indices(tmp)
     (array([0, 4, 7, 9]), array([ 1,  7, 11, 13]))
     """
-    if "DEBUG_DIADEM" in os.environ:
-        logger.error("DEBUG MODE IN DIADEM, using only 1/4 of the spectra.")
-        inds = inds[: int(len(inds) / 4)]
-
     breaks = 1 + np.where(np.diff(inds) > 1)[0]
     breaks = np.concatenate([np.array([0]), breaks, np.array([inds.size - 1])])
 

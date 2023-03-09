@@ -150,8 +150,13 @@ class ScanGroup:
                 self.mzs[i] = self.mzs[i][np.invert(int_remove)]
                 if hasattr(self, "imss"):
                     self.imss[i] = self.imss[i][np.invert(int_remove)]
-            self.base_peak_int[i] = np.max(self.intensities[i])
-            self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
+
+            if len(self.intensities[i]):
+                self.base_peak_int[i] = np.max(self.intensities[i])
+                self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
+            else:
+                self.base_peak_int[i] = -1
+                self.base_peak_mz[i] = -1
 
     def __len__(self) -> int:
         """Returns the number of spectra in the group."""
