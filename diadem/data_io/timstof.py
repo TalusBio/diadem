@@ -25,6 +25,7 @@ from diadem.data_io.mzml import (
 from diadem.data_io.utils import slice_from_center, xic
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
+from diadem.utils import is_sorted
 
 IMSError = Literal["abs", "pct"]
 
@@ -137,6 +138,7 @@ class TimsStackedChromatograms(StackedChromatograms):
 
         center_mzs = center_mzs[ims_keep]
         center_intensities = center_intensities[ims_keep]
+        assert is_sorted(center_mzs)
 
         # TODO move this to its own helper function (collapse_unique ??)
         # ... Maybe even "proprocess_ims_spec(mzs, imss, ints, ref_ims, ...)"
@@ -148,10 +150,12 @@ class TimsStackedChromatograms(StackedChromatograms):
             len(u_center_mzs), dtype=center_intensities.dtype
         )
         np.add.at(u_center_intensities, inv, center_intensities)
+        assert is_sorted(u_center_mzs)
 
         # After makig it unique, we deisotope the spectrum
         # after this, getting the indices that generated du_center_mzs[0]
         # would be np.where(np.isin(inv, du_center_indices[0]))
+
         du_center_mzs, du_center_intensities, du_center_indices = deisotope(
             u_center_mzs,
             u_center_intensities,
@@ -167,6 +171,7 @@ class TimsStackedChromatograms(StackedChromatograms):
             du_center_mzs[int_keep],
             du_center_intensities[int_keep],
         )
+        assert is_sorted(du_center_mzs)
 
         xic_outs = []
 
@@ -192,6 +197,7 @@ class TimsStackedChromatograms(StackedChromatograms):
                 track_indices=True,
             )
 
+            assert is_sorted(du_mzs)
             outs, inds = xic(
                 query_mz=du_mzs,
                 query_int=du_intensities,
@@ -480,19 +486,17 @@ def find_neighbors_mzsort(
     else:
         raise ValueError("Only 'Da' and 'ppm' values are supported as mass errors")
 
-    if intensities is not None:
-        top_n = int(max(len(intensities) * top_n_pct, top_n))
-        if len(intensities) > top_n:
-            top_indices = np.argpartition(intensities, -top_n)[-top_n:]
-        else:
-            intensities = None
+    top_n = int(max(len(intensities) * top_n_pct, top_n))
+    if len(intensities) > top_n:
+        top_indices = np.argpartition(intensities, -top_n)[-top_n:]
+    else:
+        intensities = None
 
     opts = {}
     for i1, (ims1, mz1) in enumerate(zip(ims_vals, sorted_mz_values)):
-        if intensities is not None:
-            if i1 not in top_indices:
-                opts.setdefault(i1, []).append(i1)
-                continue
+        if i1 not in top_indices:
+            opts.setdefault(i1, []).append(i1)
+            continue
 
         candidates = np.where(np.abs(sorted_mz_values - mz1) <= mz_tol)[0]
         tmp_ims = ims_vals[candidates]
@@ -647,7 +651,17 @@ def non_max_suppression_fast(boxes, overlapThresh, eps=1e-5, invert_scores=False
     return pick
 
 
-def bundle_neighbors_mzsorted(ims_values, sorted_mz_values, intensities, top_n=500):
+def bundle_neighbors_mzsorted(
+    ims_values: NDArray[np.float32],
+    sorted_mz_values: NDArray[np.float32],
+    intensities: NDArray[np.float32],
+    top_n: int = 500,
+):
+    """
+
+    WARNING:
+    Output is not necessarily sorted!!!
+    """
     BOX_EPS = 1e-7
 
     opts = find_neighbors_mzsort(
