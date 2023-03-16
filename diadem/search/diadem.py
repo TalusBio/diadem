@@ -190,17 +190,27 @@ def search_group(
 
             if (num_peaks % DEBUG_FREQUENCY) == 0:
                 before = new_stack.ref_trace.copy()
-                s = stack_getter(
-                    group=group,
-                    index=new_stack.parent_index,
-                    **new_window_kwargs,
-                )
-                plot_to_log(
-                    [before, s.ref_trace],
-                    title=(
+                try:
+                    s = stack_getter(
+                        group=group,
+                        index=new_stack.parent_index,
+                        **new_window_kwargs,
+                    )
+                    plot_vals = [before, s.ref_trace]
+                    title = (
                         f"Window before ({new_stack.ref_mz}) "
                         f"m/z and after ({s.ref_mz}) m/z"
-                    ),
+                    )
+                except ValueError:
+                    # This happens when all peaks are removed
+                    # ie: all in the spectrum matched a peptide
+                    # and were removed
+                    plot_vals = [before]
+                    title = f"Window before ({new_stack.ref_mz}) m/z and after (None)"
+
+                plot_to_log(
+                    plot_vals,
+                    title=title,
                     lines=True,
                 )
                 plot_to_log([scaling], title="Scaling")

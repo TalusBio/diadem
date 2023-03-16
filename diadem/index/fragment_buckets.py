@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -152,12 +153,14 @@ class FragmentBucket:
         assert (
             len(sorting_level) == 1
         ), "Cannot concatenate buckets with different sorting levels"
+        if len(args) == 1:
+            return args[0]
         return cls(
             fragment_mzs=np.concatenate([x.fragment_mzs for x in args]),
             fragment_series=np.concatenate([x.fragment_series for x in args]),
             precursor_ids=np.concatenate([x.precursor_ids for x in args]),
             precursor_mzs=np.concatenate([x.precursor_mzs for x in args]),
-            is_sorted=True,
+            is_sorted=False,
             sorting_level=sorting_level.pop(),
         )
 
@@ -365,7 +368,9 @@ class PrefilteredMS1BucketList:
             for k, v in unpacked.items():
                 self.buckets[k].append(v)
 
-        iterator = enumerate(tqdm(self.buckets, disable=not progress))
+        iterator = enumerate(
+            tqdm(self.buckets, disable=not progress, desc="Concatenating buckets")
+        )
 
         # This gets progressively updated with the minimum bucket size.
         min_ms2_mz = 2**15
@@ -383,6 +388,7 @@ class PrefilteredMS1BucketList:
 
         self.min_ms2_mz = min_ms2_mz
 
+    # @profile
     def unpack_bucket(self, bucket: FragmentBucket) -> dict[int, FragmentBucket]:
         """Unpacks a bucket into a dictionary of buckets.
 
@@ -392,11 +398,18 @@ class PrefilteredMS1BucketList:
         """
         # TODO decide if this should be a fragment bucket method...
         integerized = (bucket.fragment_mzs * self.prod_num).astype(int)
+        sorted_lookup = len(integerized > 1000) and is_sorted(integerized)
         uniqs = np.unique(integerized)
         out = {}
 
         for u in uniqs:
-            idxs = integerized == u
+            if sorted_lookup:
+                idxs = slice(
+                    np.searchsorted(integerized, u, "left"),
+                    np.searchsorted(integerized, u, "right"),
+                )
+            else:
+                idxs = integerized == u
 
             # TODO consider here not traking precursor mzs anymore
             out[u] = FragmentBucket(

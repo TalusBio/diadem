@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import numpy as np
 from joblib import Parallel, delayed
@@ -144,6 +144,7 @@ class ScanGroup:
                 else:
                     continue
 
+            # TODO this is hard-coded right now, change as a param
             int_remove = self.intensities[i] < 10
             if np.any(int_remove):
                 self.intensities[i] = self.intensities[i][np.invert(int_remove)]

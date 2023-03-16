@@ -1,4 +1,4 @@
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 from ms2ml.utils.mz_utils import annotate_peaks

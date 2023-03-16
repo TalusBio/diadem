@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import copy
 from collections import namedtuple
+from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from os import PathLike
 from pathlib import Path
-from typing import Iterable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -426,6 +426,7 @@ class IndexedDb:
             "mz": [],
             "ion_series": [],
             "seq_id": [],
+            "precursor_mz": [],
         }
 
         append = False
@@ -439,7 +440,10 @@ class IndexedDb:
             seq_chunk["seq_proforma"].append(prec_seqs)
             seq_chunk["decoy"].append(decoy)
 
-            for x, y, z in zip(frag_mzs, ion_series, [seq_id] * num_frags):
+            for w, x, y, z in zip(
+                [prec_mzs] * num_frags, frag_mzs, ion_series, [seq_id] * num_frags
+            ):
+                frag_chunk["precursor_mz"].append(float(w))
                 frag_chunk["mz"].append(float(x))
                 frag_chunk["ion_series"].append(y)
                 frag_chunk["seq_id"].append(z)
@@ -451,6 +455,9 @@ class IndexedDb:
                 write_parquet(
                     fragment_file_path, pd.DataFrame(frag_chunk), append=append
                 )
+
+                # This just flushes the chunk so next iteration starts
+                # clean.
                 for x in seq_chunk:
                     seq_chunk[x] = []
                 for x in frag_chunk:
@@ -836,15 +843,12 @@ class IndexedDb:
         logger.info(
             f"Filtering ms1 ranges {min_mz} to {max_mz} in database {self.name}"
         )
-        chunk_seq_df = seqs_df.filter(pl.col("seq_mz") >= min_mz).filter(
-            pl.col("seq_mz") < max_mz
-        )
+
         joint_frags = (
-            frags_df.join(
-                chunk_seq_df.select(["seq_id", "seq_mz"]), on="seq_id", how="inner"
-            )
+            frags_df.filter(pl.col("precursor_mz") >= min_mz)
+            .filter(pl.col("precursor_mz") < max_mz)
+            # .unique(maintain_order=False)
             .sort(pl.col("mz"))
-            .unique()
             .collect()
         )
 
@@ -852,27 +856,35 @@ class IndexedDb:
         out.bucketlist = PrefilteredMS1BucketList(
             [
                 FragmentBucket(
-                    fragment_mzs=joint_frags["mz"].to_numpy(),
+                    fragment_mzs=joint_frags["mz"].to_numpy().astype(np.float32),
                     fragment_series=joint_frags["ion_series"].to_numpy(),
                     precursor_ids=joint_frags["seq_id"].to_numpy(),
-                    precursor_mzs=joint_frags["seq_mz"].to_numpy(),
+                    precursor_mzs=joint_frags["precursor_mz"]
+                    .to_numpy()
+                    .astype(np.float32),
                     sorting_level="ms2",
                     is_sorted=True,
                 )
             ],
             num_decimal=2,
             max_frag_mz=2000,
+            progress=True,
         )
 
         out.prefiltered_ms1 = True
         # TODO change it so the only required section
         # is the proforma seqs that are in the mz range
-        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).unique().collect()
-        out.seq_prec_mzs = chunk_seq_df_coll["seq_mz"].to_numpy()
-        out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
-        out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
+        chunk_seq_df = (
+            seqs_df.filter(pl.col("seq_mz") >= min_mz)
+            .filter(pl.col("seq_mz") < max_mz)
+            .unique(maintain_order=False)
+            .sort(pl.col("seq_id"))
+        ).collect()
+        out.seq_prec_mzs = chunk_seq_df["seq_mz"].to_numpy().astype(np.float32)
+        out.seqs = chunk_seq_df["seq_proforma"].to_numpy()
+        out.seq_ids = chunk_seq_df["seq_id"].to_numpy()
 
-        target_set = chunk_seq_df.select(["seq_proforma", "decoy"]).collect()
+        target_set = chunk_seq_df.select(["seq_proforma", "decoy"])
         target_set = set(
             target_set["seq_proforma"].to_numpy()[
                 np.invert(target_set["decoy"].to_numpy())

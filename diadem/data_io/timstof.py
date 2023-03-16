@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import chain
 from os import PathLike
-from typing import Iterator, Literal
+from typing import Literal
 
 import numpy as np
 from alphatims.bruker import TimsTOF
@@ -23,7 +24,7 @@ from diadem.data_io.mzml import (
     StackedChromatograms,
 )
 from diadem.data_io.utils import slice_from_center, xic
-from diadem.deisotoping import deisotope
+from diadem.deisotoping import deisotope_with_ims
 from diadem.search.metrics import get_ref_trace_corrs
 from diadem.utils import is_sorted
 
@@ -152,27 +153,6 @@ class TimsStackedChromatograms(StackedChromatograms):
         np.add.at(u_center_intensities, inv, center_intensities)
         assert is_sorted(u_center_mzs)
 
-        # After makig it unique, we deisotope the spectrum
-        # after this, getting the indices that generated du_center_mzs[0]
-        # would be np.where(np.isin(inv, du_center_indices[0]))
-
-        du_center_mzs, du_center_intensities, du_center_indices = deisotope(
-            u_center_mzs,
-            u_center_intensities,
-            max_charge=3,
-            diff=mz_tolerance,
-            unit=mz_tolerance_unit,
-            track_indices=True,
-        )
-        int_keep = du_center_intensities >= (
-            du_center_intensities.max() * min_intensity_ratio
-        )
-        du_center_mzs, du_center_intensities = (
-            du_center_mzs[int_keep],
-            du_center_intensities[int_keep],
-        )
-        assert is_sorted(du_center_mzs)
-
         xic_outs = []
 
         for i, (m, inten, ims) in enumerate(zip(mzs, intensities, imss)):
@@ -188,20 +168,10 @@ class TimsStackedChromatograms(StackedChromatograms):
             u_intensities = np.zeros(len(u_mzs), dtype=inten.dtype)
             np.add.at(u_intensities, inv, inten)
 
-            du_mzs, du_intensities, du_indices = deisotope(
-                u_mzs,
-                u_intensities,
-                max_charge=3,
-                diff=mz_tolerance,
-                unit=mz_tolerance_unit,
-                track_indices=True,
-            )
-
-            assert is_sorted(du_mzs)
             outs, inds = xic(
-                query_mz=du_mzs,
-                query_int=du_intensities,
-                mzs=du_center_mzs,
+                query_mz=u_mzs,
+                query_int=u_intensities,
+                mzs=u_center_mzs,
                 tolerance=mz_tolerance,
                 tolerance_unit=mz_tolerance_unit,
             )
@@ -213,7 +183,7 @@ class TimsStackedChromatograms(StackedChromatograms):
             for y in inds:
                 if len(y) > 0:
                     collapsed_indices = np.concatenate(
-                        [np.where(np.isin(inv, du_indices[w]))[0] for w in y]
+                        [np.where(inv == w)[0] for w in y]
                     )
                     out_inds.append(np.unique(t_int_keep[collapsed_indices]))
                 else:
@@ -221,7 +191,7 @@ class TimsStackedChromatograms(StackedChromatograms):
 
             xic_outs.append((outs, out_inds))
             if i == center_index:
-                assert xic_outs[-1][0].sum() >= du_center_intensities.max()
+                assert xic_outs[-1][0].sum() >= u_center_intensities.max()
 
         stacked_arr = np.stack([x[0] for x in xic_outs], axis=-1)
 
@@ -241,8 +211,8 @@ class TimsStackedChromatograms(StackedChromatograms):
             keep = corrs >= max(min_correlation, max_peak_corr)
 
             stacked_arr = stacked_arr[..., keep, ::1]
-            du_center_mzs = du_center_mzs[keep]
-            du_center_intensities = du_center_intensities[keep]
+            u_center_mzs = u_center_mzs[keep]
+            u_center_intensities = u_center_intensities[keep]
             indices = [[y for y, k in zip(x, keep) if k] for x in indices]
 
         ref_id = np.argmax(stacked_arr[..., center_index])
@@ -250,12 +220,12 @@ class TimsStackedChromatograms(StackedChromatograms):
 
         out = TimsStackedChromatograms(
             array=stacked_arr,
-            mzs=du_center_mzs,
+            mzs=u_center_mzs,
             ref_index=ref_id,
             parent_index=index,
             base_peak_intensity=bp_int,
             stack_peak_indices=indices,
-            center_intensities=du_center_intensities,
+            center_intensities=u_center_intensities,
             ref_ims=bp_ims,
         )
         return out
@@ -361,10 +331,15 @@ class TimsSpectrumStacker(SpectrumStacker):
                 imss = []
 
                 for vi in v:
-                    new_order = np.argsort(vi["mz"])
-                    mzs.append(vi["mz"][new_order])
-                    ints.append(vi["intensity"][new_order])
-                    imss.append(vi["ims"][new_order])
+                    if len(vi["mz"]) > 0:
+                        new_order = np.argsort(vi["mz"])
+                        mzs.append(vi["mz"][new_order])
+                        ints.append(vi["intensity"][new_order])
+                        imss.append(vi["ims"][new_order])
+                    else:
+                        mzs.append(vi["mz"])
+                        ints.append(vi["intensity"])
+                        imss.append(vi["ims"])
 
                 # TODO change this to a data structure that stores
                 # this only once.
@@ -436,9 +411,9 @@ class TimsSpectrumStacker(SpectrumStacker):
 
 # @profile
 def find_neighbors_mzsort(
-    ims_vals: NDArray[np.float64],
-    sorted_mz_values: NDArray[np.float64],
-    intensities: NDArray[np.float64],
+    ims_vals: NDArray[np.float32],
+    sorted_mz_values: NDArray[np.float32],
+    intensities: NDArray[np.float32],
     top_n: int = 500,
     top_n_pct: float = 0.1,
     ims_tol: float = 0.02,
@@ -452,11 +427,11 @@ def find_neighbors_mzsort(
 
     Arguments:
     ---------
-    ims_vals: NDArray[np.float64]
+    ims_vals: NDArray[np.float32]
         Array containing the ion mobility values of the precursor.
-    sorted_mz_values: NDArray[np.float64]
+    sorted_mz_values: NDArray[np.float32]
         Sorted array contianing the mz values
-    intensities: NDArray[np.float64]
+    intensities: NDArray[np.float32]
         Array containing the intensities of the peaks
     top_n : int
         Number of peaks to use as seeds for neighborhood finding,
@@ -480,7 +455,7 @@ def find_neighbors_mzsort(
     if mz_tol_unit.lower() == "da":
         pass
     elif mz_tol_unit.lower() == "ppm":
-        mz_tol: NDArray[np.float64] = get_tolerance(
+        mz_tol: NDArray[np.float32] = get_tolerance(
             mz_tol, theoretical=sorted_mz_values, unit="ppm"
         )
     else:
@@ -490,11 +465,11 @@ def find_neighbors_mzsort(
     if len(intensities) > top_n:
         top_indices = np.argpartition(intensities, -top_n)[-top_n:]
     else:
-        intensities = None
+        top_indices = None
 
     opts = {}
     for i1, (ims1, mz1) in enumerate(zip(ims_vals, sorted_mz_values)):
-        if i1 not in top_indices:
+        if top_indices is None or i1 not in top_indices:
             opts.setdefault(i1, []).append(i1)
             continue
 
@@ -513,7 +488,7 @@ def find_neighbors_mzsort(
 def propose_boxes(
     intensities: NDArray[np.float32],
     ims_values: NDArray[np.float32],
-    mz_values: NDArray[np.float64],
+    mz_values: NDArray[np.float32],
     ref_ims: float,
     ref_mz: float,
     mz_sizes=(0.02,),
@@ -657,10 +632,9 @@ def bundle_neighbors_mzsorted(
     intensities: NDArray[np.float32],
     top_n: int = 500,
 ):
-    """
-
-    WARNING:
-    Output is not necessarily sorted!!!
+    """Warning:
+    -------
+    Output is not necessarily sorted!!!.
     """
     BOX_EPS = 1e-7
 
@@ -747,6 +721,9 @@ def _get_precursor_index_windows(
     PRELIM_N_PEAK_FILTER = 10_000  # noqa
     MIN_INTENSITY_KEEP = 100  # noqa
     MIN_NUM_SEED_BOXES = 1000  # noqa
+    IMS_TOL = 0.01
+    MZ_TOL = 0.01
+    MAX_ISOTOPE_CHARGE = 2
 
     inds = dia_data[{"precursor_indices": precursor_index}, "raw"]
     breaks, break_inds = get_break_indices(inds=inds)
@@ -798,10 +775,29 @@ def _get_precursor_index_windows(
             mz_values=peak_data["mz_values"],
             intensity_values=peak_data["corrected_intensity_values"],
             top_n=MIN_NUM_SEED_BOXES,
+            ims_tol=IMS_TOL,
+            mz_tol=MZ_TOL,
         )
         filter = f["intensity"] > MIN_INTENSITY_KEEP
         f = {k: v[filter] for k, v in f.items()}
-        pct_compression = round(len(f["mz"]) / start_len, ndigits=2)
+
+        d_out = {"mz": None, "intensity": None, "ims": None}
+        if len(f["mz"]) < 0:
+            new_order = np.argsort(f["mz"])
+            f = {k: v[new_order] for k, v in f.items()}
+
+        d_out["mz"], d_out["intensity"], d_out["ims"] = deisotope_with_ims(
+            ims_diff=IMS_TOL,
+            ims_unit="abs",
+            imss=f["ims"],
+            inten=f["intensity"],
+            mz=f["mz"],
+            mz_unit="da",
+            track_indices=False,
+            mz_diff=MZ_TOL,
+            max_charge=MAX_ISOTOPE_CHARGE,
+        )
+        pct_compression = round(len(d_out["mz"]) / start_len, ndigits=2)
         final_len = len(f["intensity"])
         pbar.set_postfix(
             {
@@ -810,13 +806,13 @@ def _get_precursor_index_windows(
                 "pct": pct_compression,
                 "min": np.min(peak_data["corrected_intensity_values"]),
                 "max": np.max(peak_data["corrected_intensity_values"]),
-                "f_min": int(np.min(f["intensity"])) if final_len else 0,
-                "f_max": int(np.max(f["intensity"])) if final_len else 0,
+                "f_min": int(np.min(d_out["intensity"])) if final_len else 0,
+                "f_max": int(np.max(d_out["intensity"])) if final_len else 0,
             },
             refresh=False,
         )
 
-        curr_push_data.update(f)
+        curr_push_data.update(d_out)
         quad_name = (
             f"{curr_push_data['quad_low_mz_values']:.6f},"
             f" {curr_push_data['quad_high_mz_values']:.6f}"
@@ -827,7 +823,7 @@ def _get_precursor_index_windows(
 
 # @profile
 def collapse_seeds(
-    seeds: dict[int, list[int]], intensity_values: NDArray[np.float64]
+    seeds: dict[int, list[int]], intensity_values: NDArray[np.float32]
 ) -> tuple[dict[int, int], set[int]]:
     seeds = seeds.copy()
     seed_keys = list(seeds.keys())
@@ -869,7 +865,17 @@ def collapse_ims(
     top_n_pct=0.2,
     ims_tol=0.01,
     mz_tol=0.01,
-) -> dict[str, NDArray[np.float64]]:
+) -> dict[str, NDArray[np.float32]]:
+    """Sample output
+    -------------
+    ```
+    bundled = {
+        "ims": np.zeros(..., dtype=np.float32),
+        "mz": np.zeros(..., dtype=np.float32),
+        "intensity": np.zeros(..., dtype=np.float32),
+    }
+    ```.
+    """
     neighborhoods = find_neighbors_mzsort(
         ims_vals=ims_values,
         sorted_mz_values=mz_values,
@@ -899,8 +905,8 @@ def collapse_ims(
     }
 
     bundled = {
-        "ims": np.zeros(len(out_seeds), dtype=np.float64),
-        "mz": np.zeros(len(out_seeds), dtype=np.float64),
+        "ims": np.zeros(len(out_seeds), dtype=np.float32),
+        "mz": np.zeros(len(out_seeds), dtype=np.float32),
         "intensity": np.zeros(len(out_seeds), dtype=np.float32),
     }
     for i, v in enumerate(out_seeds.values()):

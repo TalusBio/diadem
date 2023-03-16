@@ -148,6 +148,10 @@ class DiademIndexConfig:
 
 @dataclass(frozen=True, eq=True)
 class DiademConfig(DiademIndexConfig):  # noqa
+    # TODO split tolerances in 'within spectrum' and 'between spectra'
+    # since tolerances for deisotoping should be a lot lower than they should be
+    # for database matching ... 5ppm for a database match is ok, 1 ppm for
+    # an isotope envelope is barely acceptable.
     g_tolerances: tuple[float, ...] = field(default=(20, 20))
     g_tolerance_units: tuple[MassError, ...] = field(default=("ppm", "ppm"))
 
