@@ -74,7 +74,7 @@ class TimsStackedChromatograms(StackedChromatograms):
         window: int = 21,
         mz_tolerance: float = 0.02,
         mz_tolerance_unit: MassError = "da",
-        ims_tolerance: float = 0.1,
+        ims_tolerance: float = 0.03,
         ims_tolerance_unit: IMSError = "abs",
         # TODO implement abs and pct ims error ...
         # maybe just use the mz ppm tolerance an multiply by 10000 ...
@@ -120,7 +120,9 @@ class TimsStackedChromatograms(StackedChromatograms):
         # Except in cases where the edge of the group is reached, where
         # the center index is adjusted to the edge of the group
         slice_q, center_index = slice_from_center(
-            center=index, window=window, length=len(group.mzs)
+            center=index,
+            window=window,
+            length=len(group.mzs),
         )
         mzs = group.mzs[slice_q]
         intensities = group.intensities[slice_q]
@@ -146,11 +148,15 @@ class TimsStackedChromatograms(StackedChromatograms):
         # We collapse all unique mzs, after filtering for IMS tolerance
         # Note: Getting what indices were used to generate u_mzs[0]
         # would be np.where(inv == 0)
-        u_center_mzs, inv = np.unique(center_mzs, return_inverse=True)
-        u_center_intensities = np.zeros(
-            len(u_center_mzs), dtype=center_intensities.dtype
+        # TODO testing equality and uniqueness on floats might not be wise.
+        # I should change this to an int ... maybe setting a "intensity bin"
+        # value like comet does (0.02??)
+        u_center_mzs, u_center_intensities, inv = _bin_spectrum_intensities(
+            center_mzs,
+            center_intensities,
+            bin_width=0.02,
+            bin_offset=0,
         )
-        np.add.at(u_center_intensities, inv, center_intensities)
         assert is_sorted(u_center_mzs)
 
         xic_outs = []
@@ -164,9 +170,12 @@ class TimsStackedChromatograms(StackedChromatograms):
             m = m[t_int_keep]
             inten = inten[t_int_keep]
 
-            u_mzs, inv = np.unique(m, return_inverse=True)
-            u_intensities = np.zeros(len(u_mzs), dtype=inten.dtype)
-            np.add.at(u_intensities, inv, inten)
+            u_mzs, u_intensities, inv = _bin_spectrum_intensities(
+                m,
+                inten,
+                bin_width=0.02,
+                bin_offset=0,
+            )
 
             outs, inds = xic(
                 query_mz=u_mzs,
@@ -183,7 +192,7 @@ class TimsStackedChromatograms(StackedChromatograms):
             for y in inds:
                 if len(y) > 0:
                     collapsed_indices = np.concatenate(
-                        [np.where(inv == w)[0] for w in y]
+                        [np.where(inv == w)[0] for w in y],
                     )
                     out_inds.append(np.unique(t_int_keep[collapsed_indices]))
                 else:
@@ -231,9 +240,35 @@ class TimsStackedChromatograms(StackedChromatograms):
         return out
 
 
+def _bin_spectrum_intensities(mzs, intensities, bin_width=0.02, bin_offset=0):
+    """Bins the intensities based on the mz values.
+
+    Returns
+    -------
+    new_mzs:
+        The new mz array
+    new_intensities
+        The new intensity array
+    inv:
+        Index for the new mzs in the original mzs and intensities
+        Note: Getting what indices were used to generate new_mzs[0]
+        would be np.where(inv == 0)
+
+    """
+    new_mzs, inv = np.unique(
+        ((mzs + bin_offset) / bin_width).astype("int"),
+        return_inverse=True,
+    )
+    new_mzs = (new_mzs * bin_width) - bin_offset
+    new_intensities = np.zeros(len(new_mzs), dtype=intensities.dtype)
+    np.add.at(new_intensities, inv, intensities)
+    return new_mzs, new_intensities, inv
+
+
 @dataclass
 class TimsScanGroup(ScanGroup):
     imss: list[NDArray]
+    precursor_imss: list[NDArray]
 
     def __post_init__(self) -> None:
         """Validates that the values in the instance are consistent.
@@ -271,21 +306,35 @@ class TimsScanGroup(ScanGroup):
 
         return window
 
-    def scale_window_intensities(
+    # This is an implementation of a method used by the parent class
+    def _scale_spectrum_at(
         self,
-        index: int,
-        scaling: NDArray,
-        mzs: NDArray,
-        window_indices: list[list[int]],
-        window_mzs: NDArray,
+        spectrum_index: int,
+        value_indices: NDArray[np.int64],
+        scaling_factor: float,
     ) -> None:
-        super().scale_window_intensities(
-            index=index,
-            scaling=scaling,
-            mzs=mzs,
-            window_indices=window_indices,
-            window_mzs=window_mzs,
-        )
+        i = spectrum_index  # Alias for brevity in within this function
+
+        if len(value_indices) > 0:
+            self.intensities[i][value_indices] = (
+                self.intensities[i][value_indices] * scaling_factor
+            )
+        else:
+            return None
+
+        # TODO this is hard-coded right now, change as a param
+        int_remove = self.intensities[i] < 10
+        if np.any(int_remove):
+            self.intensities[i] = self.intensities[i][np.invert(int_remove)]
+            self.mzs[i] = self.mzs[i][np.invert(int_remove)]
+            self.imss[i] = self.imss[i][np.invert(int_remove)]
+
+        if len(self.intensities[i]):
+            self.base_peak_int[i] = np.max(self.intensities[i])
+            self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
+        else:
+            self.base_peak_int[i] = -1
+            self.base_peak_mz[i] = -1
 
     def __len__(self) -> int:
         return len(self.imss)
@@ -317,11 +366,38 @@ class TimsSpectrumStacker(SpectrumStacker):
         del _datafile
 
     def _precursor_iso_window_groups(
-        self, precursor_index: int, progress: bool = True
+        self,
+        precursor_index: int,
+        progress: bool = True,
     ) -> dict[str:TimsScanGroup]:
+        elems = self._precursor_iso_window_elements(precursor_index, progress)
+        out = {}
+        for k, v in elems.items():
+            prec_info = self._precursor_iso_window_elements(
+                0,
+                progress=progress,
+                mz_range=v["precursor_range"],
+            )
+            out[k] = TimsScanGroup(
+                precursor_mzs=prec_info["mzs"],
+                precursor_intensities=prec_info["intensities"],
+                precursor_rts=prec_info["retention_times"],
+                precursor_imss=prec_info["imss"],
+                **v,
+            )
+
+    def _precursor_iso_window_elements(
+        self,
+        precursor_index: int,
+        progress: bool = True,
+        mz_range: None | tuple[float, float] = None,
+    ) -> dict[str : dict[str:NDArray]]:
         with self.lazy_datafile() as datafile:
             index_win_dicts = _get_precursor_index_windows(
-                datafile, precursor_index=precursor_index, progress=progress
+                datafile,
+                precursor_index=precursor_index,
+                progress=progress,
+                mz_range=mz_range,
             )
             out = {}
 
@@ -349,35 +425,31 @@ class TimsSpectrumStacker(SpectrumStacker):
                 assert len(quad_low) == 1
 
                 bp_indices = [np.argmax(x) if len(x) else None for x in ints]
-                bp_ints = np.array(
-                    [
-                        x1[x2] if x2 is not None else 0
-                        for x1, x2 in zip(ints, bp_indices)
-                    ]
-                )
-                bp_mz = np.array(
-                    [
-                        x1[x2] if x2 is not None else -1
-                        for x1, x2 in zip(mzs, bp_indices)
-                    ]
-                )
+                bp_ints = [
+                    x1[x2] if x2 is not None else 0 for x1, x2 in zip(ints, bp_indices)
+                ]
+                bp_ints = np.array(bp_ints)
+                bp_mz = [
+                    x1[x2] if x2 is not None else -1 for x1, x2 in zip(mzs, bp_indices)
+                ]
+                bp_mz = np.array(bp_mz)
                 bp_indices = np.array(bp_indices)
                 # bp_ims = np.array([x1[x2] for x1, x2 in zip(imss, bp_indices)])
                 rts = np.array([x["rt_values_min"] for x in v])
                 scan_indices = [str(x["scan_indices"]) for x in v]
 
-                x = TimsScanGroup(
-                    precursor_range=(quad_low[0], quad_high[0]),
-                    mzs=mzs,
-                    intensities=ints,
-                    imss=imss,
-                    base_peak_int=bp_ints,
-                    base_peak_mz=bp_mz,
-                    # base_peak_ims=bp_ims,
-                    iso_window_name=k,
-                    retention_times=rts,
-                    scan_ids=scan_indices,
-                )
+                x = {
+                    "precursor_range": (quad_low[0], quad_high[0]),
+                    "mzs": mzs,
+                    "intensities": ints,
+                    "imss": imss,
+                    "base_peak_int": bp_ints,
+                    "base_peak_mz": bp_mz,
+                    # 'base_peak_ims':bp_ims,
+                    "iso_window_name": k,
+                    "retention_times": rts,
+                    "scan_ids": scan_indices,
+                }
                 out[k] = x
 
         return out
@@ -456,7 +528,9 @@ def find_neighbors_mzsort(
         pass
     elif mz_tol_unit.lower() == "ppm":
         mz_tol: NDArray[np.float32] = get_tolerance(
-            mz_tol, theoretical=sorted_mz_values, unit="ppm"
+            mz_tol,
+            theoretical=sorted_mz_values,
+            unit="ppm",
         )
     else:
         raise ValueError("Only 'Da' and 'ppm' values are supported as mass errors")
@@ -485,218 +559,6 @@ def find_neighbors_mzsort(
     return opts
 
 
-def propose_boxes(
-    intensities: NDArray[np.float32],
-    ims_values: NDArray[np.float32],
-    mz_values: NDArray[np.float32],
-    ref_ims: float,
-    ref_mz: float,
-    mz_sizes=(0.02,),
-    ims_sizes=(0.05, 0.1),
-):
-    """Proposes and scores bounding boxes around a peak.
-
-    Details
-    -------
-    Score definition:
-    The score is more of a loss than a score (since lower is better)
-    The score is defined as
-        [
-            (max_mz_error + # max_ims_error) +
-            (weighted_mz_standard_deviation) +
-            # (weighted_ims_standard_deviation)
-        ] / total_intensity
-
-    Therefore, boxes with very low variance in their mzs or IMSs will have low score.
-    And boxes with high intensity will also have lower intensity.
-
-    Returns
-    -------
-    boxes
-        Each box has 5 number, [min_mz, max_mz, min_ims, max_ims, score]
-    box_intensities: list[float]
-        The summed intensity in each of the boxes
-    box_centroids: list[tuple[float, float]]
-        Each centroid is a tuple of `mz_centroid, ims_centroid` where the
-        centroid is a weighted average of that dimension, using the intensities
-        as weights.
-
-    """
-    score_mutiplier = max(mz_sizes)  # + max(ims_sizes)
-    delta_ims = np.abs(ims_values - ref_ims)
-    delta_mzs = np.abs(mz_values - ref_mz)
-
-    # each box has 5 number, [min_mz, max_mz, min_ims, max_ims, score]
-    boxes = []
-    box_centroids = []
-    box_intensities = []
-
-    for mz_tol in mz_sizes:
-        for ims_tol in ims_sizes:
-            box_index = (delta_ims <= ims_tol) & (delta_mzs <= mz_tol)
-            tmp_mzs = mz_values[box_index]
-            tmp_ims = ims_values[box_index]
-            tmp_intensity = intensities[box_index]
-
-            box_intensity = tmp_intensity.sum()
-            if box_intensity == 0:
-                raise RuntimeError(f"Box has 0 intensity {box_index}")
-            mz_centroid = (tmp_mzs * tmp_intensity).sum() / box_intensity
-            ims_centroid = (tmp_ims * tmp_intensity).sum() / box_intensity
-
-            ims_std = (
-                (delta_ims[box_index] ** 2) * tmp_intensity
-            ).sum() / box_intensity
-            ims_std = np.sqrt(ims_std)
-            mz_std = (
-                0  # ((delta_mzs[box_index] ** 2)*tmp_intensity).sum() / box_intensity
-            )
-            score = (score_mutiplier + (mz_std + ims_std)) / box_intensity
-            boxes.append(
-                [
-                    ref_mz - mz_tol,
-                    ref_mz + mz_tol,
-                    ref_ims - ims_tol,
-                    ref_ims + ims_tol,
-                    score,
-                ]
-            )
-            box_intensities.append(box_intensity)
-            box_centroids.append((mz_centroid, ims_centroid))
-
-    return boxes, box_intensities, box_centroids
-
-
-# Code modified from https://pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
-# Malisiewicz et al.
-def non_max_suppression_fast(boxes, overlapThresh, eps=1e-5, invert_scores=False):
-    # Invert_scores=True keeps lowest values for the scores (like a loss)
-
-    # Eps adds a little edge to each side of the boxes
-    # (making boxes of width or height==0 manageable)
-
-    # if there are no boxes, return an empty list
-    if len(boxes) == 0:
-        return []
-    # if the bounding boxes integers, convert them to floats --
-    # this is important since we'll be doing a bunch of divisions
-    if boxes.dtype.kind == "i":
-        boxes = boxes.astype("float")
-    # initialize the list of picked indexes
-    pick = []
-    # grab the coordinates of the bounding boxes
-    # Note our boxes are [min(x),max(x),min(y),max(y)], instead of [x,y,x,y] in the orifinal implementation
-    x1 = boxes[:, 0] - eps
-    x2 = boxes[:, 1] + eps
-    y1 = boxes[:, 2] - eps
-    y2 = boxes[:, 3] + eps
-    scores = boxes[:, 4]
-    # compute the area of the bounding boxes and sort the bounding
-    # boxes by the bottom-right y-coordinate of the bounding box
-    area = (x2 - x1) * (y2 - y1)
-    idxs = np.argsort(scores)
-    if invert_scores:
-        idxs = idxs[::-1]
-
-    # keep looping while some indexes still remain in the indexes
-    # list
-    while len(idxs) > 0:
-        # grab the last index in the indexes list and add the
-        # index value to the list of picked indexes
-        last = len(idxs) - 1
-        i = idxs[last]
-        pick.append(i)
-        # find the largest (x, y) coordinates for the start of
-        # the bounding box and the smallest (x, y) coordinates
-        # for the end of the bounding box
-        xx1 = np.maximum(x1[i], x1[idxs[:last]])
-        yy1 = np.maximum(y1[i], y1[idxs[:last]])
-        xx2 = np.minimum(x2[i], x2[idxs[:last]])
-        yy2 = np.minimum(y2[i], y2[idxs[:last]])
-        # compute the width and height of the bounding box
-        w = np.maximum(0, xx2 - xx1 + eps)
-        h = np.maximum(0, yy2 - yy1 + eps)
-        # compute the ratio of overlap
-        overlap = (w * h) / area[idxs[:last]]
-        # delete all indexes from the index list that have
-        box_inds_delete = np.where(overlap > overlapThresh)[0]
-        idxs = np.delete(idxs, np.concatenate(([last], box_inds_delete)))
-
-    # return the indices of the best bounding boxes
-    return pick
-
-
-def bundle_neighbors_mzsorted(
-    ims_values: NDArray[np.float32],
-    sorted_mz_values: NDArray[np.float32],
-    intensities: NDArray[np.float32],
-    top_n: int = 500,
-):
-    """Warning:
-    -------
-    Output is not necessarily sorted!!!.
-    """
-    BOX_EPS = 1e-7
-
-    opts = find_neighbors_mzsort(
-        ims_values,
-        sorted_mz_values=sorted_mz_values,
-        intensities=intensities,
-        top_n=top_n,
-        ims_tol=0.1,
-        mz_tol=50,
-        mz_tol_unit="ppm",
-    )
-
-    unambiguous = {k for k, v in opts.items() if len(v) == 1}
-    ambiguous = {k: v for k, v in opts.items() if len(v) > 1}
-
-    unambiguous = {
-        "ims": ims_values[list(unambiguous)],
-        "mz": sorted_mz_values[list(unambiguous)],
-        "intensity": intensities[list(unambiguous)],
-    }
-
-    if len(ambiguous) > 0:
-        all_boxes = []
-        all_intensities = []
-        all_centroids = []
-        for k, v in ambiguous.items():
-            boxes, box_intensities, box_centroids = propose_boxes(
-                intensities[v],
-                ims_values[v],
-                mz_values=sorted_mz_values[v],
-                ref_ims=ims_values[k],
-                ref_mz=sorted_mz_values[k],
-                mz_sizes=(
-                    0.01,
-                    0.05,
-                ),
-                ims_sizes=(0.01, 0.05, 0.1),
-                # ims_sizes = (0.005, 0.01, 0.02),
-            )
-            all_boxes.extend(boxes)
-            all_intensities.extend(box_intensities)
-            all_centroids.extend(box_centroids)
-
-        best_boxes_indices = non_max_suppression_fast(
-            np.stack(all_boxes), 0, eps=BOX_EPS, invert_scores=True
-        )
-        best_centroids = [all_centroids[x] for x in best_boxes_indices]
-        best_intensities = [all_intensities[x] for x in best_boxes_indices]
-        mzs, imss = zip(*best_centroids)
-        boxed = {
-            "ims": imss,
-            "mz": mzs,
-            "intensity": best_intensities,
-        }
-
-        final = {k: np.concatenate([unambiguous[k], boxed[k]]) for k in unambiguous}
-    else:
-        final = unambiguous
-    return final
-
-
 def get_break_indices(
     inds: NDArray[np.int64],
 ) -> tuple[NDArray[np.int64], NDArray[np.int64]]:
@@ -716,14 +578,20 @@ def get_break_indices(
 
 
 def _get_precursor_index_windows(
-    dia_data: TimsTOF, precursor_index: int, progress: bool = True
+    dia_data: TimsTOF,
+    precursor_index: int,
+    progress: bool = True,
+    mz_range=None,
 ) -> dict[dict[list]]:
     PRELIM_N_PEAK_FILTER = 10_000  # noqa
-    MIN_INTENSITY_KEEP = 100  # noqa
+    MIN_INTENSITY_KEEP = 150  # noqa
     MIN_NUM_SEED_BOXES = 1000  # noqa
-    IMS_TOL = 0.01
-    MZ_TOL = 0.01
-    MAX_ISOTOPE_CHARGE = 2
+    IMS_TOL = 0.01  # noqa
+    # these tolerances are set narrow on purpose, since they
+    # only delimit the definition of the neighborhood, which will iteratively
+    # expanded.
+    MZ_TOL = 0.01  # noqa
+    MAX_ISOTOPE_CHARGE = 2  # noqa
 
     inds = dia_data[{"precursor_indices": precursor_index}, "raw"]
     breaks, break_inds = get_break_indices(inds=inds)
@@ -761,7 +629,8 @@ def _get_precursor_index_windows(
 
         if len(peak_data["corrected_intensity_values"]) > PRELIM_N_PEAK_FILTER:
             partition_indices = np.argpartition(
-                peak_data["corrected_intensity_values"], -PRELIM_N_PEAK_FILTER
+                peak_data["corrected_intensity_values"],
+                -PRELIM_N_PEAK_FILTER,
             )[-PRELIM_N_PEAK_FILTER:]
             peak_data = {k: v[partition_indices] for k, v in peak_data.items()}
 
@@ -770,10 +639,23 @@ def _get_precursor_index_windows(
         if len(peak_data["corrected_intensity_values"]) == 0:
             continue
 
+        ims_values = peak_data["mobility_values"]
+        mz_values = peak_data["mz_values"]
+        intensity_values = peak_data["corrected_intensity_values"]
+
+        if mz_range is not None:
+            mz_filter = slice(
+                np.searchsorted(mz_values, mz_range[0]),
+                np.searchsorted(mz_values, mz_range[1], "right"),
+            )
+            ims_values = ims_values[mz_filter]
+            mz_values = mz_values[mz_filter]
+            intensity_values = intensity_values[mz_filter]
+
         f = collapse_ims(
-            ims_values=peak_data["mobility_values"],
-            mz_values=peak_data["mz_values"],
-            intensity_values=peak_data["corrected_intensity_values"],
+            ims_values=ims_values,
+            mz_values=mz_values,
+            intensity_values=intensity_values,
             top_n=MIN_NUM_SEED_BOXES,
             ims_tol=IMS_TOL,
             mz_tol=MZ_TOL,
@@ -822,15 +704,16 @@ def _get_precursor_index_windows(
 
 
 # @profile
-def collapse_seeds(
-    seeds: dict[int, list[int]], intensity_values: NDArray[np.float32]
+def _collapse_seeds(
+    seeds: dict[int, list[int]],
+    intensity_values: NDArray[np.float32],
 ) -> tuple[dict[int, int], set[int]]:
     seeds = seeds.copy()
     seed_keys = list(seeds.keys())
     seed_order = np.argsort(-intensity_values[np.array(seed_keys)])
     taken = set()
     out_seeds = {}
-    max_iter = 3
+    MAX_ITER = 5  # noqa
 
     for s in seed_order:
         sk = seed_keys[s]
@@ -840,9 +723,9 @@ def collapse_seeds(
         out_seeds[sk] = set(seeds.pop(sk, {sk}))
         curr_len = 1
 
-        for _ in range(max_iter):
+        for _ in range(MAX_ITER):
             neigh_set = set(chain(*[seeds.pop(x, set()) for x in out_seeds[sk]])).union(
-                out_seeds[sk]
+                out_seeds[sk],
             )
             untaken = neigh_set.difference(taken)
             taken.update(untaken)
@@ -866,7 +749,9 @@ def collapse_ims(
     ims_tol=0.01,
     mz_tol=0.01,
 ) -> dict[str, NDArray[np.float32]]:
-    """Sample output
+    """Collapses peaks with similar IMS and MZ.
+
+    Sample output
     -------------
     ```
     bundled = {
@@ -876,6 +761,8 @@ def collapse_ims(
     }
     ```.
     """
+    MIN_NEIGHBORS_SEED = 6  # noqa
+
     neighborhoods = find_neighbors_mzsort(
         ims_vals=ims_values,
         sorted_mz_values=mz_values,
@@ -888,15 +775,18 @@ def collapse_ims(
 
     unambiguous = {k for k, v in neighborhoods.items() if len(v) == 1}
     ambiguous = {k: v for k, v in neighborhoods.items() if len(v) > 1}
-    seeds = {k: v for k, v in ambiguous.items() if len(v) > 5}
+    seeds = {k: v for k, v in ambiguous.items() if len(v) >= MIN_NEIGHBORS_SEED}
 
     if seeds:
-        out_seeds, taken = collapse_seeds(
-            seeds=seeds, intensity_values=intensity_values
+        out_seeds, taken = _collapse_seeds(
+            seeds=seeds,
+            intensity_values=intensity_values,
         )
     else:
         out_seeds, taken = {}, set()
 
+    # TODO consider whether I really want to keep ambiduous matches
+    # In theory I could keep only the expanded seeds.
     ambiguous_untaken = list(set(ambiguous).difference(taken))
     unambiguous_out = {
         "ims": ims_values[list(chain(unambiguous, ambiguous_untaken))],
@@ -912,6 +802,8 @@ def collapse_ims(
     for i, v in enumerate(out_seeds.values()):
         v = list(v)
         v_intensities = intensity_values[v]
+        # This generates the weighted average of the ims and mz
+        # as the new values for the peak.
         bundled["intensity"][i] = (tot_intensity := v_intensities.sum())
         bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
         bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
@@ -920,21 +812,3 @@ def collapse_ims(
         k: np.concatenate([unambiguous_out[k], bundled[k]]) for k in unambiguous_out
     }
     return final
-
-
-if __name__ == "__main__":
-    file = "/Users/sebastianpaez/git/diadem/profiling/profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d"
-    config = DiademConfig()
-
-    data = TimsSpectrumStacker(file, config)
-    group = next(data.yield_iso_window_groups())
-    group.get_highest_window(
-        21,
-        0.01,
-        mz_tolerance=0.02,
-        mz_tolerance_unit="da",
-        ims_tolerance=0.03,
-        ims_tolerance_unit="abs",
-        min_correlation=0.5,
-        max_peaks=150,
-    )

@@ -237,8 +237,10 @@ class FragmentBucketList:
             return self.buckets[val]
         else:
             raise ValueError(
-                f"Subsetting FragmentBucketList with {type(val)}: {val} is not"
-                " supported"
+                (
+                    f"Subsetting FragmentBucketList with {type(val)}: {val} is not"
+                    " supported"
+                ),
             )
 
     @classmethod
@@ -286,7 +288,7 @@ class FragmentBucketList:
                     precursor_mzs=precursor_mzs[i : i + chunksize],
                     sorting_level=sorting_level,
                     is_sorted=been_sorted,
-                )
+                ),
             )
         return cls(buckets)
 
@@ -297,7 +299,9 @@ class FragmentBucketList:
 
     # @profile
     def yield_candidates(
-        self, ms2_range: tuple[float, float], ms1_range: tuple[float, float]
+        self,
+        ms2_range: tuple[float, float],
+        ms1_range: tuple[float, float],
     ) -> None | Iterator[tuple[int, float, str]]:
         """Yields fragments that match the passed masses.
 
@@ -329,7 +333,9 @@ class FragmentBucketList:
                 continue
 
             yield from zip(
-                bucket.precursor_ids, bucket.fragment_mzs, bucket.fragment_series
+                bucket.precursor_ids,
+                bucket.fragment_mzs,
+                bucket.fragment_series,
             )
 
 
@@ -369,7 +375,7 @@ class PrefilteredMS1BucketList:
                 self.buckets[k].append(v)
 
         iterator = enumerate(
-            tqdm(self.buckets, disable=not progress, desc="Concatenating buckets")
+            tqdm(self.buckets, disable=not progress, desc="Concatenating buckets"),
         )
 
         # This gets progressively updated with the minimum bucket size.
@@ -421,7 +427,9 @@ class PrefilteredMS1BucketList:
         return out
 
     def yield_buckets_matching_ms2(
-        self, min_mz: float, max_mz: float
+        self,
+        min_mz: float,
+        max_mz: float,
     ) -> Iterator[FragmentBucket]:
         """Yields buckets that match the passed ms2 range."""
         min_index = max(0, int(min_mz * self.prod_num) - 1)
@@ -461,10 +469,12 @@ class PrefilteredMS1BucketList:
         min_mz, max_mz = ms2_range
         last_mz = 0
         for x in self.yield_buckets_matching_ms2(min_mz, max_mz):
+            assert is_sorted(x.fragment_mzs)
+            last_val = np.searchsorted(x.fragment_mzs, max_mz, "right")
             for precursor_id, fragmz, fragseries in zip(
-                x.precursor_ids, x.fragment_mzs, x.fragment_series
+                x.precursor_ids[:last_val],
+                x.fragment_mzs[:last_val],
+                x.fragment_series[:last_val],
             ):
-                if fragmz > max_mz:
-                    break
                 assert last_mz <= (last_mz := fragmz), "Fragment mzs not sorted"
                 yield precursor_id, fragmz, fragseries

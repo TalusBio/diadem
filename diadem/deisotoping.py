@@ -104,7 +104,10 @@ def deisotope(
     return peaks
 
 
-# TODO this is a function prototype, if it works abstract it with the prototype
+# TODO this is a function prototype, if it works abstract it and
+# combine with the parent function.
+
+
 # @profile
 def deisotope_with_ims(
     mz: NDArray[np.float32] | list[float],
@@ -124,15 +127,21 @@ def deisotope_with_ims(
     Parameters
     ----------
     mz, list[float]
-        A list of the mz values to be deisotoped.
+        A list of the mz values to be deisotoped. (NEEDS to be sorted)
     inten, list[float]
         A list of the intensities that correspond in order to the elements in mz.
+    imss, list[float]
+        A list of the ims values to use for the search.
     max_charge, int
         Maximum charge to look for in the isotopes.
-    diff, float
+    mz_diff, float
         Tolerance to use when searching (typically 20 for ppm or 0.02 for da)
-    unit, str
+    mz_unit, str
         Unit for the diff. ppm or da
+    ims_diff, float
+        Tolerance to use when searching in the IMS dimension.
+    ims_unit, float
+        Tolerance unit to use when searching in the ims dimension.
     track_indices, bool
         Whether to return the indices of the combined indices as well.
 
@@ -142,9 +151,9 @@ def deisotope_with_ims(
     >>> my_imss = [0.7, 0.7, 0.8, 0.7, 0.8, 0.7]
     >>> my_intens = [1-(0.1*i) for i,_ in enumerate(my_mzs)]
     >>> deisotope_with_ims(my_mzs, my_intens, my_imss, max_charge=2, mz_diff=5.0, mz_unit="ppm", ims_diff=0.01, ims_unit="abs")
-    (array([800.9  , 803.408, 803.409]), array([1. , 2.1, 1.4]), (0.7, 0.7, 0.8))
+    (array([800.9  , 803.408, 803.409]), array([1. , 2.1, 1.4]), array([0.7, 0.7, 0.8]))
     >>> deisotope_with_ims(my_mzs, my_intens, my_imss, max_charge=2, mz_diff=5.0, mz_unit="ppm", ims_diff=0.01, ims_unit="abs", track_indices=True)
-    (array([800.9  , 803.408, 803.409]), array([1. , 2.1, 1.4]), (0.7, 0.7, 0.8), ([0], [1, 3, 5], [2, 4]))
+    (array([800.9  , 803.408, 803.409]), array([1. , 2.1, 1.4]), array([0.7, 0.7, 0.8]), ([0], [1, 3, 5], [2, 4]))
     """
     if mz_unit.lower() == "da":
 
@@ -166,7 +175,14 @@ def deisotope_with_ims(
 
     peaks = [(mz, intensity, ims) for mz, intensity, ims in zip(mz, inten, imss)]
     peaks = [
-        {"mz": mz, "ims": ims, "intensity": intensity, "envelope": None, "charge": None}
+        {
+            "mz": mz,
+            "ims": ims,
+            "intensity": intensity,
+            "ims_range": None,
+            "envelope": None,
+            "charge": None,
+        }
         for mz, intensity, ims in peaks
     ]
     for i in range(len(peaks)):
@@ -185,9 +201,23 @@ def deisotope_with_ims(
                     iso = NEUTRON / charge
                     # Note, this assumes that the isotope envelope always decreases in
                     # intensity, which is not accurate for high mol weight fragments.
+                    intensity_increases = inten[i] < inten[j]
                     matches_mz = abs(delta - iso) <= mz_tol
-                    if matches_mz and inten[i] < inten[j]:
+
+                    if (c_ims_range := peaks[i]["ims_range"]) is None:
+                        c_ims_range = (imss[i] - ims_tol, imss[i] + ims_tol)
+                        matches_envelope_ims = True
+                    else:
+                        matches_envelope_ims = (
+                            imss[j] >= c_ims_range[0] and imss[j] <= c_ims_range[1]
+                        )
+                    if matches_mz and intensity_increases and matches_envelope_ims:
+                        # Why does it add intensities before checking the charge?
                         peaks[j]["intensity"] += peaks[i]["intensity"]
+                        peaks[j]["ims_range"] = (
+                            max(c_ims_range[0], imss[j] - ims_tol),
+                            min(c_ims_range[1], imss[j] + ims_tol),
+                        )
                         if track_indices:
                             peaks[j]["indices"].extend(peaks[i]["indices"])
                         if peaks[i]["charge"] and peaks[i]["charge"] != charge:
@@ -195,6 +225,7 @@ def deisotope_with_ims(
                         peaks[j]["charge"] = charge
                         peaks[i]["charge"] = charge
                         peaks[i]["envelope"] = j
+
             j -= 1
 
     if not track_indices:
@@ -205,7 +236,8 @@ def deisotope_with_ims(
 
 
 def _filter_peaks(
-    peaks: dict, extract: tuple[str]
+    peaks: dict,
+    extract: tuple[str],
 ) -> tuple[NDArray[np.float32] | list, ...]:
     """Filters peaks to remove isotope envelopes.
 

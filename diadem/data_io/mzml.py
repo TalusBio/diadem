@@ -10,7 +10,6 @@ from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml import Spectrum
 from ms2ml.data.adapters import MZMLAdapter
-from ms2ml.utils.mz_utils import annotate_peaks
 from numpy.typing import NDArray
 from pandas import DataFrame
 from tqdm.auto import tqdm
@@ -20,6 +19,10 @@ from diadem.data_io.utils import slice_from_center, strictzip, xic
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
 from diadem.utils import check_sorted, plot_to_log
+
+# TODO re-make some of these classes as ABCs
+# It would make intent explicit, since they are sub-classed
+# for timstof data equivalents.
 
 
 @dataclass
@@ -34,6 +37,10 @@ class ScanGroup:
     retention_times: NDArray
     scan_ids: list[str]
     iso_window_name: str
+
+    precursor_mzs: list[NDArray]
+    precursor_intensities: list[NDArray]
+    precursor_rts: NDArray
 
     def __post_init__(self) -> None:
         """Check that all the arrays have the same length."""
@@ -53,8 +60,10 @@ class ScanGroup:
             raise ValueError("Not all lengths are the same")
         if len(self.precursor_range) != 2:
             raise ValueError(
-                "Precursor mass range should have 2 elements,"
-                f" has {len(self.precursor_range)}"
+                (
+                    "Precursor mass range should have 2 elements,"
+                    f" has {len(self.precursor_range)}"
+                ),
             )
         plot_to_log(
             self.base_peak_int,
@@ -98,9 +107,7 @@ class ScanGroup:
         self,
         index: int,
         scaling: NDArray,
-        mzs: NDArray,
         window_indices: list[list[int]],
-        window_mzs: NDArray,
     ) -> None:
         """Scales the intensities of specific mzs in a window of the chromatogram.
 
@@ -122,42 +129,50 @@ class ScanGroup:
         """
         window = len(scaling)
         slc, center_index = slice_from_center(
-            center=index, window=window, length=len(self)
+            center=index,
+            window=window,
+            length=len(self),
         )
+        slc = range(*slc.indices(len(self)))
 
-        # TODO this can be tracked internally ...
-        match_obs_mz_indices, match_win_mz_indices = annotate_peaks(
-            theo_mz=mzs,
-            mz=window_mzs,
-            tolerance=0.02,
-            unit="da",
-        )
-
-        match_win_mz_indices = np.unique(match_win_mz_indices)
-
-        zipped = strictzip(range(*slc.indices(len(self))), scaling, window_indices)
+        zipped = strictzip(slc, scaling, window_indices)
         for i, s, si in zipped:
-            for mz_i in match_win_mz_indices:
-                sim = si[mz_i]
-                if len(sim) > 0:
-                    self.intensities[i][sim] = self.intensities[i][sim] * s
-                else:
-                    continue
+            inds = [np.array(x) for x in si if len(x)]
+            if inds:
+                inds = np.unique(np.concatenate(inds))
+                self._scale_spectrum_at(
+                    spectrum_index=i,
+                    value_indices=inds,
+                    scaling_factor=s,
+                )
 
-            # TODO this is hard-coded right now, change as a param
-            int_remove = self.intensities[i] < 10
-            if np.any(int_remove):
-                self.intensities[i] = self.intensities[i][np.invert(int_remove)]
-                self.mzs[i] = self.mzs[i][np.invert(int_remove)]
-                if hasattr(self, "imss"):
-                    self.imss[i] = self.imss[i][np.invert(int_remove)]
+    def _scale_spectrum_at(
+        self,
+        spectrum_index: int,
+        value_indices: NDArray[np.int64],
+        scaling_factor: float,
+    ) -> None:
+        i = spectrum_index  # Alias for brevity in within this function
 
-            if len(self.intensities[i]):
-                self.base_peak_int[i] = np.max(self.intensities[i])
-                self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
-            else:
-                self.base_peak_int[i] = -1
-                self.base_peak_mz[i] = -1
+        if len(value_indices) > 0:
+            self.intensities[i][value_indices] = (
+                self.intensities[i][value_indices] * scaling_factor
+            )
+        else:
+            return None
+
+        # TODO this is hard-coded right now, change as a param
+        int_remove = self.intensities[i] < 10
+        if np.any(int_remove):
+            self.intensities[i] = self.intensities[i][np.invert(int_remove)]
+            self.mzs[i] = self.mzs[i][np.invert(int_remove)]
+
+        if len(self.intensities[i]):
+            self.base_peak_int[i] = np.max(self.intensities[i])
+            self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
+        else:
+            self.base_peak_int[i] = -1
+            self.base_peak_mz[i] = -1
 
     def __len__(self) -> int:
         """Returns the number of spectra in the group."""
@@ -226,7 +241,7 @@ class StackedChromatograms:
                 f" for {i}"
             )
         assert array_w == len(
-            self.stack_peak_indices
+            self.stack_peak_indices,
         ), "Window size is not respected in the stack"
 
     @property
@@ -313,7 +328,9 @@ class StackedChromatograms:
         # Except in cases where the edge of the group is reached, where
         # the center index is adjusted to the edge of the group
         slice_q, center_index = slice_from_center(
-            center=index, window=window, length=len(group.mzs)
+            center=index,
+            window=window,
+            length=len(group.mzs),
         )
         mzs = group.mzs[slice_q]
         intensities = group.intensities[slice_q]
@@ -342,7 +359,7 @@ class StackedChromatograms:
                     mzs=center_mzs,
                     tolerance=mz_tolerance,
                     tolerance_unit=mz_tolerance_unit,
-                )
+                ),
             )
             if i == center_index:
                 assert xic_outs[-1][0].sum() >= center_intensities.max()
@@ -404,6 +421,7 @@ class SpectrumStacker:
         # TODO check if directly reading the xml is faster ...
         # also evaluate if that is needed
         scaninfo = self.adapter.get_scan_info()
+        ms1_scaninfo = scaninfo[scaninfo.ms_level <= 1]
         self.config = config
         if "DEBUG_DIADEM" in os.environ:
             logger.error("RUNNING DIADEM IN DEBUG MODE (only 700-710 mz iso windows)")
@@ -411,13 +429,18 @@ class SpectrumStacker:
             scaninfo = scaninfo[
                 [x[0] > 700 and x[0] < 705 for x in scaninfo.iso_window]
             ]
+        self.ms1info = ms1_scaninfo
         self.ms2info = scaninfo[scaninfo.ms_level > 1].copy().reset_index()
         self.unique_iso_windows = set(np.array(self.ms2info.iso_window))
 
-    def _get_iso_window_group(
-        self, iso_window_name: str, iso_window: tuple[float, float], chunk: DataFrame
-    ) -> ScanGroup:
-        logger.debug(f"Processing iso window {iso_window_name}")
+    def _preprocess_scangroup(
+        self,
+        name: str,
+        df_chunk: DataFrame,
+        mz_range: None | tuple[float, float] = None,
+        progress: bool = True,
+    ) -> tuple[NDArray, ...]:
+        logger.debug(f"Processing iso window {name}")
 
         window_mzs = []
         window_ints = []
@@ -430,7 +453,9 @@ class SpectrumStacker:
         npeaks_deisotope = []
 
         for row in tqdm(
-            chunk.itertuples(), desc=f"Preprocessing spectra for {iso_window_name}"
+            df_chunk.itertuples(),
+            desc=f"Preprocessing spectra for {name}",
+            disable=not progress,
         ):
             spec_id = row.spec_id
             curr_spec: Spectrum = self.adapter[spec_id]
@@ -438,6 +463,17 @@ class SpectrumStacker:
             # Also activation seems to not be recorded ...
             curr_spec = curr_spec.filter_top(self.config.run_max_peaks_per_spec)
             curr_spec = curr_spec.filter_mz_range(*self.config.ion_mz_range)
+
+            mzs = curr_spec.mz
+            intensities = curr_spec.intensity
+
+            if mz_range is not None:
+                mz_filter = slice(
+                    np.searchsorted(mzs, mz_range[0]),
+                    np.searchsorted(mzs, mz_range[1], "right"),
+                )
+                mzs = mzs[mz_filter]
+                intensities = intensities[mz_filter]
 
             # Deisotoping!
             if self.config.run_deconvolute_spectra:
@@ -455,13 +491,12 @@ class SpectrumStacker:
                     unit=self.config.g_tolerance_units[1],
                 )
                 npeaks_deisotope.append(len(mzs))
-            else:
-                mzs = curr_spec.mz
-                intensities = curr_spec.intensity
+
             # TODO evaluate this scaling
             intensities = np.sqrt(intensities)
             if len(mzs) == 0:
                 mzs, intensities = np.array([0]), np.array([0])
+
             bp_index = np.argmax(intensities)
             bp_mz = mzs[bp_index]
             bp_int = intensities[bp_index]
@@ -474,20 +509,65 @@ class SpectrumStacker:
             window_rtinsecs.append(rtinsecs)
             window_scanids.append(spec_id)
 
-        avg_peaks_raw = np.array(npeaks_raw).mean()
-        avg_peaks_deisotope = np.array(npeaks_deisotope).mean()
-        # Create datasets within each group
-        logger.info(f"Saving group {iso_window_name} with length {len(window_mzs)}")
-        logger.info(
-            f"{avg_peaks_raw} peaks/spec; {avg_peaks_deisotope} peaks/spec after"
-            " deisotoping"
-        )
-
         window_bp_mz = np.array(window_bp_mz).astype(np.float32)
         window_bp_int = np.array(window_bp_int).astype(np.float32)
         window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
         check_sorted(window_rtinsecs)
         window_scanids = np.array(window_scanids, dtype="object")
+
+        avg_peaks_raw = np.array(npeaks_raw).mean()
+        avg_peaks_deisotope = np.array(npeaks_deisotope).mean()
+        # Create datasets within each group
+        logger.info(f"Saving group {name} with length {len(window_mzs)}")
+        logger.info(
+            (
+                f"{avg_peaks_raw} peaks/spec; {avg_peaks_deisotope} peaks/spec after"
+                " deisotoping"
+            ),
+        )
+
+        out = [
+            window_mzs,
+            window_ints,
+            window_bp_mz,
+            window_bp_int,
+            window_rtinsecs,
+            window_scanids,
+        ]
+        return out
+
+    def _get_iso_window_group(
+        self,
+        iso_window_name: str,
+        iso_window: tuple[float, float],
+        ms2_chunk: DataFrame,
+        ms1_chunk: DataFrame,
+    ) -> ScanGroup:
+        (
+            window_mzs,
+            window_ints,
+            window_bp_mz,
+            window_bp_int,
+            window_rtinsecs,
+            window_scanids,
+        ) = self._preprocess_scangroup(
+            name=iso_window_name,
+            df_chunk=ms2_chunk,
+            mz_range=None,
+        )
+
+        (
+            prec_mzs,
+            prec_ints,
+            _,
+            _,
+            prec_rtinsecs,
+            _,
+        ) = self._preprocess_scangroup(
+            name="precursors " + iso_window_name,
+            df_chunk=ms1_chunk,
+            mz_range=iso_window,
+        )
 
         group = ScanGroup(
             iso_window_name=iso_window_name,
@@ -498,15 +578,20 @@ class SpectrumStacker:
             base_peak_int=window_bp_int,
             retention_times=window_rtinsecs,
             scan_ids=window_scanids,
+            precursor_intensities=prec_ints,
+            precursor_mzs=prec_mzs,
+            precursor_rts=prec_rtinsecs,
         )
         return group
 
     def get_iso_window_groups(
-        self, workerpool: None | Parallel = None
+        self,
+        workerpool: None | Parallel = None,
     ) -> list[ScanGroup]:
         """Returns a list of all ScanGroups in an mzML file."""
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
         iso_windows, chunks = zip(*list(grouped))
+        precursor_info = self.ms1info
 
         iso_window_names = [
             "({:.06f}, {:.06f})".format(*iso_window) for iso_window in iso_windows
@@ -515,14 +600,20 @@ class SpectrumStacker:
         if workerpool is None:
             results = [
                 self._get_iso_window_group(
-                    iso_window_name=iwn, iso_window=iw, chunk=chunk
+                    iso_window_name=iwn,
+                    iso_window=iw,
+                    ms2_chunk=chunk,
+                    ms1_chunk=precursor_info,
                 )
                 for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
             ]
         else:
             results = workerpool(
                 delayed(self._get_iso_window_group)(
-                    iso_window_name=iwn, iso_window=iw, chunk=chunk
+                    iso_window_name=iwn,
+                    iso_window=iw,
+                    ms2_chunk=chunk,
+                    ms1_chunk=precursor_info,
                 )
                 for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
             )
@@ -532,13 +623,17 @@ class SpectrumStacker:
     def yield_iso_window_groups(self, progress: bool = False) -> Iterator[ScanGroup]:
         """Yield scan groups for each unique isolation window."""
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
+        precursor_info = self.ms1info
 
         for i, (iso_window, chunk) in enumerate(
-            tqdm(grouped, disable=not progress, desc="Unique Isolation Windows")
+            tqdm(grouped, disable=not progress, desc="Unique Isolation Windows"),
         ):
             iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
 
             group = self._get_iso_window_group(
-                iso_window_name=iso_window_name, iso_window=iso_window, chunk=chunk
+                iso_window_name=iso_window_name,
+                iso_window=iso_window,
+                ms2_chunk=chunk,
+                ms1_chunk=precursor_info,
             )
             yield group

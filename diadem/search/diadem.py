@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import time
 from os import PathLike
 from pathlib import Path
@@ -57,7 +56,7 @@ def search_group(
 
     IMS_TOLERANCE = config.g_ims_tolerance  # noqa
     IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
-    MAX_NUM_CONSECUTIVE_FAILS = 50
+    MAX_NUM_CONSECUTIVE_FAILS = 50  # noqa
 
     new_window_kwargs = {
         "window": WINDOWSIZE,
@@ -74,7 +73,7 @@ def search_group(
             {
                 "ims_tolerance": IMS_TOLERANCE,
                 "ims_tolerance_unit": IMS_TOLERANCE_UNIT,
-            }
+            },
         )
         stack_getter = TimsStackedChromatograms.from_group
 
@@ -105,15 +104,19 @@ def search_group(
 
         if num_fails > ALLOWED_FAILS:
             logger.warning(
-                "Exiting scoring loop because number of"
-                f" failes reached the maximum {ALLOWED_FAILS}"
+                (
+                    "Exiting scoring loop because number of"
+                    f" failes reached the maximum {ALLOWED_FAILS}"
+                ),
             )
             break
 
         if num_consecutive_fails > MAX_NUM_CONSECUTIVE_FAILS:
             logger.warning(
-                "Exiting with early termination due "
-                f"to consecurtive fails {num_consecutive_fails}"
+                (
+                    "Exiting with early termination due "
+                    f"to consecurtive fails {num_consecutive_fails}"
+                ),
             )
             group_results = group_results[:-num_consecutive_fails]
             break
@@ -126,8 +129,10 @@ def search_group(
 
         if last_id == new_stack.parent_index:
             logger.debug(
-                "Array generated on same index "
-                f"{new_stack.parent_index} as last iteration"
+                (
+                    "Array generated on same index "
+                    f"{new_stack.parent_index} as last iteration"
+                ),
             )
             num_fails += 1
         else:
@@ -155,21 +160,21 @@ def search_group(
                 precursor_mz=group.precursor_range,
                 spec_int=scoring_intensities,
                 spec_mz=new_stack.mzs,
-                top_n=1,
+                top_n=100,
             )
+            # TODO add here a filter for precursor evidence and re-rank
+            logger.error("Sebastian has not implemented this!!")
         else:
             scores = None
 
         if scores is not None:
             scores["id"] = match_id
-            ref_peak_mz = new_stack.mzs[new_stack.ref_index]
+            match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
+            match_indices = np.sort(np.unique(np.array(match_indices)))
 
-            mzs = itertools.chain(
-                *[scores[x].iloc[0] for x in scores.columns if "_mzs" in x]
-            )
-            best_match_mzs = np.sort(
-                np.array(tuple(itertools.chain(mzs, [ref_peak_mz])))
-            )
+            scaling_window_indices = [
+                [x[y] for y in match_indices] for x in new_stack.stack_peak_indices
+            ]
 
             # Scale based on the inverse of the reference chromatogram
             normalized_trace = new_stack.ref_trace / new_stack.ref_trace.max()
@@ -183,9 +188,7 @@ def search_group(
             group.scale_window_intensities(
                 index=new_stack.parent_index,
                 scaling=scaling,
-                mzs=best_match_mzs,
-                window_indices=new_stack.stack_peak_indices,
-                window_mzs=new_stack.mzs,
+                window_indices=scaling_window_indices,
             )
 
             if (num_peaks % DEBUG_FREQUENCY) == 0:
@@ -220,13 +223,15 @@ def search_group(
             num_consecutive_fails = 0
         else:
             logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
-            scaling = SCALING_RATIO * np.ones_like(new_stack.ref_trace)
+            scaling = (
+                SCALING_RATIO
+                * np.ones_like(new_stack.ref_trace)
+                * MIN_INTENSITY_SCALING
+            )
             group.scale_window_intensities(
                 index=new_stack.parent_index,
                 scaling=scaling,
-                mzs=new_stack.mzs,
                 window_indices=new_stack.stack_peak_indices,
-                window_mzs=new_stack.mzs,
             )
             num_fails += 1
             num_consecutive_fails += 1
@@ -238,7 +243,7 @@ def search_group(
                 "max_intensity": curr_highest_peak_int,
                 "num_fails": num_fails,
                 "num_scores": len(group_results),
-            }
+            },
         )
         pbar.update(1)
         if ((et := time.time()) - st) >= 2:
@@ -260,8 +265,10 @@ def search_group(
                     tot_candidates += 1
 
             logger.error(
-                f"Iteration took waaaay too long scores={scores} ;"
-                f" {tot_candidates} total candidates"
+                (
+                    f"Iteration took waaaay too long scores={scores} ;"
+                    f" {tot_candidates} total candidates"
+                ),
             )
             logger.error(f"{new_stack.mzs.copy()}; len({len(new_stack.mzs)})")
             st = et
@@ -270,16 +277,19 @@ def search_group(
 
     pbar.close()
     plot_to_log(
-        np.log1p(np.array(intensity_log)), title="Max (log) intensity over time"
+        np.log1p(np.array(intensity_log)),
+        title="Max (log) intensity over time",
     )
     plot_to_log(np.array(score_log), title="Score over time")
     plot_to_log(np.array(index_log), title="Requested index over time")
     plot_to_log(np.array(fwhm_log), title="FWHM across time")
     logger.info(
-        f"Done with window {group.iso_window_name}, "
-        f"scored {num_peaks} peaks in {len(group.base_peak_int)} spectra. "
-        f"Intensity of the last scored peak {curr_highest_peak_int} "
-        f"on index {last_id}"
+        (
+            f"Done with window {group.iso_window_name}, "
+            f"scored {num_peaks} peaks in {len(group.base_peak_int)} spectra. "
+            f"Intensity of the last scored peak {curr_highest_peak_int} "
+            f"on index {last_id}"
+        ),
     )
 
     if len(group_results) == 0:
@@ -314,7 +324,10 @@ def diadem_main(
 
     # Set up database
     db, cache = db_from_fasta(
-        fasta=fasta_path, chunksize=None, config=config, index=False
+        fasta=fasta_path,
+        chunksize=None,
+        config=config,
+        index=False,
     )
 
     # set up mzml file
@@ -359,7 +372,8 @@ def diadem_main(
             )
 
     results: pd.DataFrame = pd.concat(
-        [x for x in results if x is not None], ignore_index=True
+        [x for x in results if x is not None],
+        ignore_index=True,
     )
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
