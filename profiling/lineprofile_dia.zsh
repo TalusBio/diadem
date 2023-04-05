@@ -3,7 +3,7 @@
 # what you want profiled
 mkdir -p lineprofile_results
 sed -ie "s/# @profile/@profile/g" ../diadem/**/*.py
-python -m pip install -e ../.
+python -m pip install ../.
 sed -ie "s/@profile/# @profile/g" ../diadem/**/*.py
 
 set -x

@@ -70,6 +70,7 @@ include = ["diadem"]
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "--doctest-modules -v"
+doctest_optionflags = "NORMALIZE_WHITESPACE"
 testpaths = [
     "diadem",
     "tests",

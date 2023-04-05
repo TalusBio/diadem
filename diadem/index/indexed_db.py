@@ -26,7 +26,7 @@ from diadem.index.fragment_buckets import (
     FragmentBucketList,
     PrefilteredMS1BucketList,
 )
-from diadem.utils import disabled_gc, is_sorted, make_decoy
+from diadem.utilities.utils import disabled_gc, is_sorted, make_decoy
 
 # Pre-calculating factorials so I do not need
 # to calculate them repeatedly while scoring

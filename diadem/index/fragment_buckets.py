@@ -8,7 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 from tqdm.auto import tqdm
 
-from diadem.utils import get_slice_inds, is_sorted
+from diadem.utilities.utils import get_slice_inds, is_sorted
 
 SortingLevel = Literal["ms1", "ms2"]
 

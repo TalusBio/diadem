@@ -18,7 +18,7 @@ from diadem.config import DiademConfig, MassError
 from diadem.data_io.utils import slice_from_center, strictzip, xic
 from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
-from diadem.utils import check_sorted, plot_to_log
+from diadem.utilities.utils import check_sorted, plot_to_log
 
 # TODO re-make some of these classes as ABCs
 # It would make intent explicit, since they are sub-classed
@@ -173,6 +173,60 @@ class ScanGroup:
         else:
             self.base_peak_int[i] = -1
             self.base_peak_mz[i] = -1
+
+    def get_precursor_evidence(
+        self,
+        rt: float,
+        mzs: NDArray[np.float32],
+        mz_tolerance: float,
+        mz_tolerance_unit="ppm",
+    ):
+        # NOTE: This is a first implementation of the functionality,
+        # therefore it is very simple and prone to optimization and
+        # rework.
+
+        # 1. Find the closest RT.
+        # 2. Find if there are peaks that match the mzs.
+        # 3. Return a list of dm and a list of intensities for each.
+
+        index = np.searchsorted(self.precursor_rts, rt)
+        slc, center_index = slice_from_center(
+            index,
+            window=11,
+            length=len(self.precursor_mzs),
+        )
+        q_mzs = self.precursor_mzs[index]
+
+        q_intensities = self.precursor_intensities[index]
+        # TODO change preprocessing of the MS1 level to make it more
+        # permissive, cleaner spectra is not critical here.
+
+        out_ints = []
+        out_dms = []
+
+        if len(q_intensities) > 0:
+            for q_mzs, q_intensities in zip(
+                self.precursor_mzs[slc],
+                self.precursor_intensities[slc],
+            ):
+                intensities, indices = xic(
+                    query_mz=q_mzs,
+                    query_int=q_intensities,
+                    mzs=mzs,
+                    tolerance=mz_tolerance,
+                    tolerance_unit=mz_tolerance_unit,
+                )
+                dms = [q_mzs[inds] - match_mz for inds, match_mz in zip(indices, mzs)]
+                out_ints.append(intensities)
+                out_dms.append(dms)
+
+            intensities = np.stack(out_ints, axis=0).sum(axis=0)
+            dms = out_dms[center_index]
+        else:
+            intensities = np.zeros_like(mzs)
+            dms = [[] for _ in range(len(mzs))]
+
+        return intensities, dms
 
     def __len__(self) -> int:
         """Returns the number of spectra in the group."""
@@ -483,13 +537,14 @@ class SpectrumStacker:
 
                 mzs = curr_spec.mz[order]
                 intensities = curr_spec.intensity[order]
-                mzs, intensities = deisotope(
-                    mzs,
-                    intensities,
-                    max_charge=5,
-                    diff=self.config.g_tolerances[1],
-                    unit=self.config.g_tolerance_units[1],
-                )
+                if len(mzs) > 0:
+                    mzs, intensities = deisotope(
+                        mzs,
+                        intensities,
+                        max_charge=5,
+                        diff=self.config.g_tolerances[1],
+                        unit=self.config.g_tolerance_units[1],
+                    )
                 npeaks_deisotope.append(len(mzs))
 
             # TODO evaluate this scaling

@@ -24,9 +24,10 @@ from diadem.data_io.mzml import (
     StackedChromatograms,
 )
 from diadem.data_io.utils import slice_from_center, xic
-from diadem.deisotoping import deisotope_with_ims
+
+# from diadem.deisotoping import deisotope_with_ims
 from diadem.search.metrics import get_ref_trace_corrs
-from diadem.utils import is_sorted
+from diadem.utilities.utils import is_sorted
 
 IMSError = Literal["abs", "pct"]
 
@@ -240,7 +241,12 @@ class TimsStackedChromatograms(StackedChromatograms):
         return out
 
 
-def _bin_spectrum_intensities(mzs, intensities, bin_width=0.02, bin_offset=0):
+def _bin_spectrum_intensities(
+    mzs: NDArray,
+    intensities: NDArray,
+    bin_width: float = 0.02,
+    bin_offset: float = 0.0,
+) -> tuple[NDArray, NDArray, list[list[int]]]:
     """Bins the intensities based on the mz values.
 
     Returns
@@ -256,7 +262,7 @@ def _bin_spectrum_intensities(mzs, intensities, bin_width=0.02, bin_offset=0):
 
     """
     new_mzs, inv = np.unique(
-        ((mzs + bin_offset) / bin_width).astype("int"),
+        np.rint((mzs + bin_offset) / bin_width),
         return_inverse=True,
     )
     new_mzs = (new_mzs * bin_width) - bin_offset
@@ -373,18 +379,39 @@ class TimsSpectrumStacker(SpectrumStacker):
         elems = self._precursor_iso_window_elements(precursor_index, progress)
         out = {}
         for k, v in elems.items():
+            # Note: precursor id of 0 means inactive quadrupole
+            # and collision cell.
             prec_info = self._precursor_iso_window_elements(
                 0,
                 progress=progress,
                 mz_range=v["precursor_range"],
             )
+            assert len(list(prec_info)) == 1
+            prec_key = list(prec_info)[0]
+            prec_info = prec_info[prec_key]
+            inten_filter = prec_info["base_peak_int"] > 0
+
+            precursor_mzs = [
+                k for i, k in enumerate(prec_info["mzs"]) if inten_filter[i]
+            ]
+            precursor_intensities = [
+                k for i, k in enumerate(prec_info["intensities"]) if inten_filter[i]
+            ]
+            precursor_imss = [
+                k for i, k in enumerate(prec_info["imss"]) if inten_filter[i]
+            ]
+            precursor_rts = prec_info["retention_times"][inten_filter]
+
+            assert is_sorted(precursor_rts)
+
             out[k] = TimsScanGroup(
-                precursor_mzs=prec_info["mzs"],
-                precursor_intensities=prec_info["intensities"],
-                precursor_rts=prec_info["retention_times"],
-                precursor_imss=prec_info["imss"],
+                precursor_mzs=precursor_mzs,
+                precursor_intensities=precursor_intensities,
+                precursor_rts=precursor_rts,
+                precursor_imss=precursor_imss,
                 **v,
             )
+        return out
 
     def _precursor_iso_window_elements(
         self,
@@ -543,7 +570,7 @@ def find_neighbors_mzsort(
 
     opts = {}
     for i1, (ims1, mz1) in enumerate(zip(ims_vals, sorted_mz_values)):
-        if top_indices is None or i1 not in top_indices:
+        if top_indices is not None and i1 not in top_indices:
             opts.setdefault(i1, []).append(i1)
             continue
 
@@ -561,6 +588,8 @@ def find_neighbors_mzsort(
 
 def get_break_indices(
     inds: NDArray[np.int64],
+    min_diff: float | int = 1,
+    break_values: NDArray = None,
 ) -> tuple[NDArray[np.int64], NDArray[np.int64]]:
     """Gets the incides and break values for an increasing array.
 
@@ -570,7 +599,9 @@ def get_break_indices(
     >>> get_break_indices(tmp)
     (array([0, 4, 7, 9]), array([ 1,  7, 11, 13]))
     """
-    breaks = 1 + np.where(np.diff(inds) > 1)[0]
+    if break_values is None:
+        break_values = inds
+    breaks = 1 + np.where(np.diff(break_values) > min_diff)[0]
     breaks = np.concatenate([np.array([0]), breaks, np.array([inds.size - 1])])
 
     break_indices = inds[breaks]
@@ -581,19 +612,20 @@ def _get_precursor_index_windows(
     dia_data: TimsTOF,
     precursor_index: int,
     progress: bool = True,
-    mz_range=None,
+    mz_range: None | tuple[float, float] = None,
 ) -> dict[dict[list]]:
     PRELIM_N_PEAK_FILTER = 10_000  # noqa
-    MIN_INTENSITY_KEEP = 150  # noqa
-    MIN_NUM_SEED_BOXES = 1000  # noqa
+    MIN_INTENSITY_KEEP = 50  # noqa
+    MIN_NUM_SEEDS = 10_000  # noqa
     IMS_TOL = 0.01  # noqa
     # these tolerances are set narrow on purpose, since they
     # only delimit the definition of the neighborhood, which will iteratively
     # expanded.
-    MZ_TOL = 0.01  # noqa
-    MAX_ISOTOPE_CHARGE = 2  # noqa
+    MZ_TOL = 0.02  # noqa
+    MAX_ISOTOPE_CHARGE = 3  # noqa
 
     inds = dia_data[{"precursor_indices": precursor_index}, "raw"]
+
     breaks, break_inds = get_break_indices(inds=inds)
 
     push_data = dia_data.convert_from_indices(
@@ -656,7 +688,7 @@ def _get_precursor_index_windows(
             ims_values=ims_values,
             mz_values=mz_values,
             intensity_values=intensity_values,
-            top_n=MIN_NUM_SEED_BOXES,
+            top_n=MIN_NUM_SEEDS,
             ims_tol=IMS_TOL,
             mz_tol=MZ_TOL,
         )
@@ -668,16 +700,21 @@ def _get_precursor_index_windows(
             new_order = np.argsort(f["mz"])
             f = {k: v[new_order] for k, v in f.items()}
 
-        d_out["mz"], d_out["intensity"], d_out["ims"] = deisotope_with_ims(
-            ims_diff=IMS_TOL,
-            ims_unit="abs",
-            imss=f["ims"],
-            inten=f["intensity"],
-            mz=f["mz"],
-            mz_unit="da",
-            track_indices=False,
-            mz_diff=MZ_TOL,
-            max_charge=MAX_ISOTOPE_CHARGE,
+        # d_out["mz"], d_out["intensity"], d_out["ims"] = deisotope_with_ims(
+        #     ims_diff=IMS_TOL,
+        #     ims_unit="abs",
+        #     imss=f["ims"],
+        #     inten=f["intensity"],
+        #     mz=f["mz"],
+        #     mz_unit="da",
+        #     track_indices=False,
+        #     mz_diff=MZ_TOL,
+        #     max_charge=MAX_ISOTOPE_CHARGE,
+        # )
+        d_out["mz"], d_out["intensity"], d_out["ims"] = (
+            f["mz"],
+            f["intensity"],
+            f["ims"],
         )
         pct_compression = round(len(d_out["mz"]) / start_len, ndigits=2)
         final_len = len(f["intensity"])
@@ -761,7 +798,8 @@ def collapse_ims(
     }
     ```.
     """
-    MIN_NEIGHBORS_SEED = 6  # noqa
+    MIN_NEIGHBORS_SEED = 3  # noqa
+    assert is_sorted(mz_values)
 
     neighborhoods = find_neighbors_mzsort(
         ims_vals=ims_values,
@@ -773,7 +811,7 @@ def collapse_ims(
         mz_tol=mz_tol,
     )
 
-    unambiguous = {k for k, v in neighborhoods.items() if len(v) == 1}
+    # unambiguous = {k for k, v in neighborhoods.items() if len(v) == 1}
     ambiguous = {k: v for k, v in neighborhoods.items() if len(v) > 1}
     seeds = {k: v for k, v in ambiguous.items() if len(v) >= MIN_NEIGHBORS_SEED}
 
@@ -785,15 +823,7 @@ def collapse_ims(
     else:
         out_seeds, taken = {}, set()
 
-    # TODO consider whether I really want to keep ambiduous matches
-    # In theory I could keep only the expanded seeds.
     ambiguous_untaken = list(set(ambiguous).difference(taken))
-    unambiguous_out = {
-        "ims": ims_values[list(chain(unambiguous, ambiguous_untaken))],
-        "mz": mz_values[list(chain(unambiguous, ambiguous_untaken))],
-        "intensity": intensity_values[list(chain(unambiguous, ambiguous_untaken))],
-    }
-
     bundled = {
         "ims": np.zeros(len(out_seeds), dtype=np.float32),
         "mz": np.zeros(len(out_seeds), dtype=np.float32),
@@ -808,7 +838,21 @@ def collapse_ims(
         bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
         bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
 
+    # # # TODO consider whether I really want to keep ambiduous matches
+    # # # In theory I could keep only the expanded seeds.
+    # unambiguous_out = {
+    #     "ims": ims_values[list(chain(unambiguous, ambiguous_untaken))],
+    #     "mz": mz_values[list(chain(unambiguous, ambiguous_untaken))],
+    #     "intensity": intensity_values[list(chain(unambiguous, ambiguous_untaken))],
+    # }
+
+    unambiguous_out = {
+        "ims": ims_values[list(ambiguous_untaken)],
+        "mz": mz_values[list(ambiguous_untaken)],
+        "intensity": intensity_values[list(ambiguous_untaken)],
+    }
     final = {
         k: np.concatenate([unambiguous_out[k], bundled[k]]) for k in unambiguous_out
     }
+
     return final

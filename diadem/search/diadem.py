@@ -17,7 +17,7 @@ from diadem.data_io.mzml import ScanGroup, StackedChromatograms
 from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.search.search_utils import make_pin
-from diadem.utils import plot_to_log
+from diadem.utilities.utils import plot_to_log
 
 
 # @profile
@@ -54,6 +54,9 @@ def search_group(
     MS2_TOLERANCE = config.g_tolerances[1]  # noqa
     MS2_TOLERANCE_UNIT = config.g_tolerance_units[1]  # noqa
 
+    MS1_TOLERANCE = config.g_tolerances[0]  # noqa
+    MS1_TOLERANCE_UNIT = config.g_tolerance_units[0]  # noqa
+
     IMS_TOLERANCE = config.g_ims_tolerance  # noqa
     IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
     MAX_NUM_CONSECUTIVE_FAILS = 50  # noqa
@@ -88,6 +91,8 @@ def search_group(
     index_log = []
     fwhm_log = []
     num_peaks = 0
+    num_targets = 0
+    num_decoys = 0
 
     # Fail related variables
     num_fails = 0
@@ -162,13 +167,33 @@ def search_group(
                 spec_mz=new_stack.mzs,
                 top_n=100,
             )
-            # TODO add here a filter for precursor evidence and re-rank
-            logger.error("Sebastian has not implemented this!!")
+
+            # if scores is not None:
+            #     rt = group.retention_times[new_stack.ref_index]
+            #     prec_intensity, prec_dms = group.get_precursor_evidence(
+            #         rt,
+            #         mzs=scores["PrecursorMZ"].values,
+            #         mz_tolerance=MS1_TOLERANCE,
+            #         mz_tolerance_unit=MS1_TOLERANCE_UNIT,
+            #     )
+            #     scores["PrecursorIntensity"] = prec_intensity
+            #     scores.drop(scores[scores.PrecursorIntensity < 100].index, inplace = True)
+            #     scores.reset_index(drop=True, inplace=True)
+            #     scores["rank"] = scores["Score"].rank(ascending=False, method="min")
+            #     if len(scores) == 0:
+            #         logger.debug("All scores were removed due to precursor filtering")
+            #         scores = None
+
         else:
             scores = None
 
         if scores is not None:
             scores["id"] = match_id
+            if scores["decoy"].iloc[0]:
+                num_decoys += 1
+            else:
+                num_targets += 1
+
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
 
@@ -243,6 +268,8 @@ def search_group(
                 "max_intensity": curr_highest_peak_int,
                 "num_fails": num_fails,
                 "num_scores": len(group_results),
+                "n_targets": num_targets,
+                "n_decoys": num_decoys,
             },
         )
         pbar.update(1)
