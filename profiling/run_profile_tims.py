@@ -10,10 +10,13 @@ cli.diadem_main(
         run_parallelism=1,  # Needs to use 1 core for profiling
         run_max_peaks=20000,
         run_allowed_fails=5000,
-        g_tolerances=(0.03, 0.03),
+        g_tolerances=(0.02, 0.02),
         g_tolerance_units=("da", "da"),
-        g_ims_tolerance=0.04,
+        g_ims_tolerance=0.02,
         g_ims_tolerance_unit="abs",
+        run_min_correlation_score=0.5,
+        run_min_intensity_ratio=0.01,
+        peptide_mz_range=(400, 2000),
     ),
     out_prefix="lineprofile_results_tims/results",
 )

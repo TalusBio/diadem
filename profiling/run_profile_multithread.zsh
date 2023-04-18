@@ -18,3 +18,6 @@ R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_multithrea
 # Tuning some parameters, changing threads to 4
 # [INFO]  - Found 16790 peptides with q<=0.01
 # 2023-02-21 17:46:55.441 | INFO     | diadem.search.diadem:diadem_main:312 - Elapsed time: 6328.449725866318
+
+# [INFO]  - Found 27119 peptides with q<=0.01
+# 2023-04-13 13:33:17.309 | INFO     | diadem.search.diadem:diadem_main:425 - Elapsed time: 8089.781619787216

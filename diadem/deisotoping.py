@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.typing import NDArray
 
-from diadem.utilities.neighborhood import multidim_neighbor_search
+from diadem.utilities.neighborhood import _multidim_neighbor_search
 
 NEUTRON = 1.00335
 
@@ -23,6 +23,7 @@ def ppm_to_delta_mass(obs: float, ppm: float) -> float:
     return ppm * obs / 1_000_000.0
 
 
+# @profile
 def _deisotope_with_ims_arrays(
     mzs,
     intensities,
@@ -79,6 +80,17 @@ def _deisotope_with_ims_arrays(
         for i, peak in enumerate(peaks):
             peak["indices"] = [i]
 
+    dist_funs = {k: lambda x, y: y - x for k in dim_order}
+
+    # sort all elements by their first dimension
+    spec_order = np.argsort(spec["mz"])
+    spec = {k: v[spec_order] for k, v in spec.items()}
+
+    spec_indices = np.arange(len(spec["mz"]))
+
+    # It might be faster to just generate an expanded
+    # array with all the charge variants and then do a
+    # single search.
     for charge in range(max_charge + 1, 0, -1):
         dist_ranges = {
             "mz": (
@@ -88,12 +100,14 @@ def _deisotope_with_ims_arrays(
             "ims": (-ims_tolerance, ims_tolerance),
         }
 
-        out = multidim_neighbor_search(
-            spec,
-            spec,
+        out = _multidim_neighbor_search(
+            elems_1=spec,
+            elems_2=spec,
+            elems_1_indices=spec_indices,
+            elems_2_indices=spec_indices,
+            dist_funs=dist_funs,
             dist_ranges=dist_ranges,
-            order=dim_order,
-            force_vectorized=True,  # This is up to optimization.
+            dimension_order=dim_order,
         )
 
         isotope_graph = out.left_neighbors

@@ -178,7 +178,7 @@ class DiademConfig(DiademIndexConfig):  # noqa
 
     # Min intensity to consider for matching and extracting
     run_min_intensity_ratio: float = 0.01
-    run_min_correlation_score: float = 0.5
+    run_min_correlation_score: float = 0.2
 
     run_scaling_ratio = 0.001
     run_scalin_limits: tuple[float, float] = (0.001, 0.999)

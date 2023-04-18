@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from diadem.utilities.utils import is_sorted
+
 
 @dataclass
 class IndexBipartite:
@@ -249,6 +251,7 @@ class NeighborFinder:
         return out
 
 
+# @profile
 def multidim_neighbor_search(
     elems1: dict[str, NDArray],
     elems2: dict[str, NDArray],
@@ -314,8 +317,8 @@ def multidim_neighbor_search(
             dist_fun = _default_dist_fun if dist_funs is None else dist_funs[curr]
 
             # Filter to keep only the allowable matches
-            x = x[xi]
-            y = y[yi]
+            # x = x[xi]
+            # y = y[yi]
 
             # Sort the x and y arrays, keeping track of the original order
             # For example:
@@ -325,14 +328,33 @@ def multidim_neighbor_search(
             #     and therefore to get the original index of element 1 in the sorted
             #     array (6) one would use ...
             #     order_array[i] (0 in this case)
-            x_order = np.argsort(x)
-            y_order = np.argsort(y)
+            x_order = np.argsort(x, kind="stable")
+            y_order = np.argsort(y, kind="stable")
+
+            # This allowed neighbors have indices that correspond to the original
+            # array, not the sorted array, therefore we need to use the order array
+            # to get the correct indices.
+            if last_graph is None:
+                allowed_neighbors = None
+            else:
+                allowed_neighbors = last_graph.left_neighbors
+                # x_order[k] being k 1 is the index of the lowest element,
+                # not the position of element k in the sorted array
+
+                # So we need an inverted order array
+                inv_x_order = np.argsort(x_order, kind="stable")
+                inv_y_order = np.argsort(y_order, kind="stable")
+                allowed_neighbors = {
+                    inv_x_order[k]: inv_y_order[v] for k, v in allowed_neighbors.items()
+                }
+
             neighbors = find_neighbors_sorted(
                 x[x_order],
                 y[y_order],
                 dist_fun=dist_fun,
                 low_dist=dist_ranges[curr][0],
                 high_dist=dist_ranges[curr][1],
+                allowed_neighbors=allowed_neighbors,
             )
             t_xi, t_yi = neighbors.get_matching_indices()
             if len(t_xi) == 0 or len(t_yi) == 0:
@@ -341,8 +363,8 @@ def multidim_neighbor_search(
             o_xi = xi[x_order[t_xi]]
             o_yi = yi[y_order[t_yi]]
 
-            xi = xi[x_order[np.unique(t_xi)]]
-            yi = yi[y_order[np.unique(t_yi)]]
+            # xi = xi[x_order[np.unique(t_xi)]]
+            # yi = yi[y_order[np.unique(t_yi)]]
 
             orig_index_graph = IndexBipartite.from_arrays(o_xi, o_yi)
 
@@ -380,12 +402,14 @@ def multidim_neighbor_search(
     return last_graph
 
 
+# @profile
 def find_neighbors_sorted(
     x: NDArray,
     y: NDArray,
     dist_fun: callable,
     low_dist: float,
     high_dist: float,
+    allowed_neighbors: dict[int, set[int]] | None = None,
 ) -> IndexBipartite:
     """Finds neighbors between to sorted arrays.
 
@@ -418,17 +442,43 @@ def find_neighbors_sorted(
     >>> find_neighbors_sorted(x,y,dist_fun,low_dist, high_dist)
     IndexBipartite(left_neighbors={0: [0], 2: [2], 3: [3], 6: [4, 5]},
       right_neighbors={0: [0], 2: [2], 3: [3], 4: [6], 5: [6]})
+    >>> find_neighbors_sorted(x,y,dist_fun,low_dist, high_dist, allowed_neighbors={6: {5, 4}})
+    IndexBipartite(left_neighbors={6: [4, 5]}, right_neighbors={4: [6], 5: [6]})
     """
+    assert is_sorted(x)
+    assert is_sorted(y)
     assert low_dist < high_dist
+    assert dist_fun(low_dist, high_dist) > 0
+    assert dist_fun(high_dist, low_dist) < 0
+
     neighbors = IndexBipartite()
 
     ii = 0
-    for i in range(len(x)):
+
+    if allowed_neighbors is None:
+        iter_x = range(len(x))
+    else:
+        iter_x = sorted(list(allowed_neighbors.keys()))
+
+    for i in iter_x:
         x_val = x[i]
+        # if (abs(x_val - 0.8112) < 1e-4):
+        #     breakpoint()
         last_diff = None
-        for j in range(ii, len(y)):
+
+        if allowed_neighbors is None:
+            iter_y = range(ii, len(y))
+        else:
+            iter_y = sorted(list(allowed_neighbors[i]))
+
+        for j in iter_y:
             y_val = y[j]
 
+            # if (abs(x_val - 401.7911) < 1e-4) & (abs(y_val - 401.8036) < 1e-4):
+            #     breakpoint()
+
+            # if (abs(x_val - 0.8112) < 1e-4) & (abs(y_val - 0.8085) < 1e-4):
+            #      breakpoint()
             diff = dist_fun(x_val, y_val)
 
             # TODO disable this for performance ...
@@ -609,3 +659,160 @@ def _apply_vectorized(x: NDArray, y: NDArray, fun: callable) -> NDArray:
     """
     outs = fun(np.tile(np.expand_dims(x, axis=-1), len(y)), y)
     return outs
+
+
+# @profile
+def multidim_neighbor_search(
+    elems1: dict[str, NDArray],
+    elems2: dict[str, NDArray] | None,
+    dist_ranges: dict[str, tuple[float, float]],
+    dist_funs: None | dict[str, callable] = None,
+    dimension_order: None | tuple[str] = None,
+) -> IndexBipartite:
+    """Searches for neighbors in multiple dimensions.
+
+    Arguments:
+    ---------
+    elems1 and elems2, dict[str,NDArray]:
+        A dictionary of arrays.
+        All arrays within one of those elements need to have the same
+        length.
+    dist_ranges, dict[str, tuple[float, float]]:
+        maximum and minimum ranges for each of the dimensions.
+    dist_funs:
+        Dictionary of functions used to calculate distances.
+        For details check the documentation of `find_neighbors_sorted`
+    dimension_order, optional str:
+        Optional tuple of strings denoting what dimensions to use.
+
+    Examples:
+    --------
+    >>> x1 = {"d1": np.array([1000., 1000., 2001., 3000.]),
+    ...    "d2": np.array([1000., 1000.3, 2000., 3000.01])}
+    >>> x2 = {"d1": np.array([1000.01, 1000.01, 2000., 3000.]),
+    ...    "d2": np.array([1000.01, 1000.01, 2000., 3001.01])}
+    >>> d_funs = {"d1": lambda x,y: 1e6 * (y-x)/abs(x), "d2": lambda x,y: y-x}
+    >>> d_ranges = {"d1": (-10, 10), "d2": (-0.02, 0.02)}
+    >>> multidim_neighbor_search(
+    ...    x1, x2, d_ranges, d_funs
+    ... )
+    IndexBipartite(left_neighbors={0: [0, 1]}, right_neighbors={0: [0], 1: [0]})
+    """
+    if dimension_order is None:
+        dimension_order = list(elems1.keys())
+
+    elems_1_indices = np.arange(len(elems1[dimension_order[0]]))
+
+    if dist_funs is None:
+        dist_funs = {k: lambda x, y: y - x for k in dimension_order}
+
+    # sort all elements by their first dimension
+    elems_1_order = np.argsort(elems1[dimension_order[0]])
+
+    elems_1 = {k: v[elems_1_order] for k, v in elems1.items()}
+
+    # The original indices are also sorted by the same dimension
+    elems_1_indices = elems_1_indices[elems_1_order]
+
+    if elems2 is not None:
+        elems_2_indices = np.arange(len(elems2[dimension_order[0]]))
+        elems_2_order = np.argsort(elems2[dimension_order[0]])
+        elems_2 = {k: v[elems_2_order] for k, v in elems2.items()}
+        elems_2_indices = elems_2_indices[elems_2_order]
+    else:
+        elems_2 = elems_1
+        elems_2_indices = elems_1_indices
+
+    # Set up the graph where the neighbors will be stored
+    out = _multidim_neighbor_search(
+        elems_1=elems_1,
+        elems_2=elems_2,
+        elems_1_indices=elems_1_indices,
+        elems_2_indices=elems_2_indices,
+        dist_ranges=dist_ranges,
+        dist_funs=dist_funs,
+        dimension_order=dimension_order,
+    )
+    return out
+
+
+# @profile
+def _multidim_neighbor_search(
+    elems_1: dict[str, NDArray],
+    elems_2: dict[str, NDArray],
+    elems_1_indices: NDArray,
+    elems_2_indices: NDArray,
+    dist_ranges: dict[str, tuple[float, float]],
+    dist_funs: dict[str, callable],
+    dimension_order: tuple[str],
+):
+    neighbors = IndexBipartite()
+    # ii = 0
+
+    for i in range(len(elems_1[dimension_order[0]])):
+        # Allowable indices is a list that maps the indices that
+        # are still viable to use, mapping to the original indices
+        allowable_indices = None
+        for dimension in dimension_order:
+            curr_dimension_matches = []
+            dist_fun = dist_funs[dimension]
+            low_dist, high_dist = dist_ranges[dimension]
+            x = elems_1[dimension]
+            y = elems_2[dimension]
+
+            x_val = x[i]
+
+            assert low_dist < high_dist
+            assert dist_fun(low_dist, high_dist) > 0
+            assert dist_fun(high_dist, low_dist) < 0
+
+            # we generate an iterable that yields the indices of
+            # the original array in increasing order of the current
+            # dimension
+            if allowable_indices is not None:
+                if len(allowable_indices) == 0:
+                    break
+                # we can only search in the allowable indices
+                # from the previous dimension
+                allowed_y = y[allowable_indices]
+
+                match_indices = allowed_y >= x_val + low_dist
+                match_indices = match_indices & (allowed_y <= x_val + high_dist)
+                curr_dimension_matches = allowable_indices[match_indices]
+            else:
+                curr_dimension_matches = np.arange(
+                    np.searchsorted(y, x_val + low_dist),
+                    np.searchsorted(y, x_val + high_dist),
+                )
+
+                # Speed test
+                match_indices = y >= x_val + low_dist
+
+                # Surprisingly, this is slower ...
+                # ii = np.searchsorted(y[ii:], x_val + low_dist) + ii
+                # oi = np.searchsorted(y[ii:], x_val + high_dist) + ii
+                # curr_dimension_matches_o = np.arange(ii, oi)
+                # assert np.all(curr_dimension_matches == curr_dimension_matches_o)
+
+            # if allowable_indices is not None:
+            #     assert all(x in allowable_indices for x in curr_dimension_matches)
+            allowable_indices = curr_dimension_matches
+
+        # After going though all dimensions, we have the allowable indices
+        # for the current element in the first array
+        for j in curr_dimension_matches:
+            neighbors.add_connection(i, j)
+
+    # Now we have to map the indices back to the original indices
+    # TODO check if vectorizing this is faster
+    neighbors = IndexBipartite(
+        left_neighbors={
+            elems_1_indices[k]: {elems_2_indices[w] for w in v}
+            for k, v in neighbors.left_neighbors.items()
+        },
+        right_neighbors={
+            elems_2_indices[k]: {elems_1_indices[w] for w in v}
+            for k, v in neighbors.right_neighbors.items()
+        },
+    )
+    return neighbors

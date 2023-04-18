@@ -273,6 +273,8 @@ def search_group(
             },
         )
         pbar.update(1)
+
+        # TODO move this so it is disabled without the debug flag ...
         if ((et := time.time()) - st) >= 2:
             from ms2ml.utils.mz_utils import get_tolerance
 
@@ -294,7 +296,9 @@ def search_group(
             logger.error(
                 (
                     f"Iteration took waaaay too long scores={scores} ;"
-                    f" {tot_candidates} total candidates"
+                    f" {tot_candidates} total candidates for precursor range "
+                    f"{group.precursor_range} and m/z range "
+                    f"and ms2 range {(mz - ms2_tol, mz + ms2_tol)}"
                 ),
             )
             logger.error(f"{new_stack.mzs.copy()}; len({len(new_stack.mzs)})")

@@ -746,22 +746,24 @@ class IndexedDb:
                 ms1_range=ms1_range,
                 ms2_range=(fragment_mz - ms2_tol, fragment_mz + ms2_tol),
             )
+            candidates = list(candidates)
+            dms = np.array([x[1] for x in candidates])
+            dms = np.abs(dms - fragment_mz)
+            candidates = [x for x, y in zip(candidates, dms <= ms2_tol) if y]
 
-            for seq, frag, series in candidates:
+            for (seq, frag, series), dm in zip(candidates, dms):
                 # Should tolerances be checked here?
                 # IN THEORY, they should have been filtered in the past.
-                dm = frag - fragment_mz
-                if abs(dm) <= ms2_tol:
-                    peaks.append(
-                        {
-                            "seq": seq,
-                            "ion": series,
-                            "mz": fragment_mz,
-                            "intensity": fragment_intensity,
-                            "error": dm,
-                            "peak_id": i,
-                        },
-                    )
+                peaks.append(
+                    {
+                        "seq": seq,
+                        "ion": series,
+                        "mz": fragment_mz,
+                        "intensity": fragment_intensity,
+                        "error": dm,
+                        "peak_id": i,
+                    },
+                )
 
         peptide_ids = np.array([x["seq"] for x in peaks])
         ids, counts = np.unique(peptide_ids, return_counts=True)
@@ -899,6 +901,7 @@ class IndexedDb:
             .sort(pl.col("mz"))
             .collect()
         )
+        logger.debug(f"Loaded {len(joint_frags)} fragments from parquet cache.")
 
         out = copy.copy(self)
         out.bucketlist = PrefilteredMS1BucketList(
