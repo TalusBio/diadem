@@ -23,4 +23,4 @@ R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_tims/resul
 R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_tims/results.diadem.tsv.pin") ; g <- ggplot(foo, aes(x = seq_along(`Score`), y = Score, colour = factor(Label))) + geom_point(alpha=0.4) ; ggsave("lineprofile_results_tims/iter_score_plot.png", plot = g)'
 
 mokapot lineprofile_results_tims/results.diadem.tsv.pin --test_fdr 0.05 --keep_decoys -d lineprofile_results_tims
-R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_tims/mokapot.peptides.txt") ; foo2 = readr::read_tsv("mokapot.decoy.peptides.txt") ; g <- ggplot(bind_rows(foo, foo2), aes(x = `mokapot score`, fill = Label)) + geom_density(alpha=0.4) ; ggsave("lineprofile_results_tims/td_plot.png", plot = g)'
+R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_tims/mokapot.peptides.txt") ; foo2 = readr::read_tsv("lineprofile_results_tims/mokapot.decoy.peptides.txt") ; g <- ggplot(bind_rows(foo, foo2), aes(x = `mokapot score`, fill = Label)) + geom_density(alpha=0.4) ; ggsave("lineprofile_results_tims/td_plot.png", plot = g)'

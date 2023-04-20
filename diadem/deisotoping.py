@@ -43,6 +43,7 @@ def _deisotope_with_ims_arrays(
 
     If imss is None, will assume there is no IMS dimension in the data.
     """
+
     if imss is None:
         peak_iter = zip(mzs, intensities)
         peaks = [
@@ -75,18 +76,17 @@ def _deisotope_with_ims_arrays(
         extract_values = ["mz", "intensity", "ims"]
         spec = {"mz": mzs, "intensity": intensities, "ims": imss}
 
+    dist_funs = {k: lambda x, y: y - x for k in dim_order}
+    # sort all elements by their first dimension
+    spec_order = np.argsort(spec["mz"])
+    peaks = [peaks[i] for i in spec_order]
+    spec = {k: v[spec_order] for k, v in spec.items()}
+
+    spec_indices = np.arange(len(spec["mz"]))
     if track_indices:
         extract_values.append("indices")
         for i, peak in enumerate(peaks):
             peak["indices"] = [i]
-
-    dist_funs = {k: lambda x, y: y - x for k in dim_order}
-
-    # sort all elements by their first dimension
-    spec_order = np.argsort(spec["mz"])
-    spec = {k: v[spec_order] for k, v in spec.items()}
-
-    spec_indices = np.arange(len(spec["mz"]))
 
     # It might be faster to just generate an expanded
     # array with all the charge variants and then do a

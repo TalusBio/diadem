@@ -748,6 +748,7 @@ def _multidim_neighbor_search(
 ):
     neighbors = IndexBipartite()
     # ii = 0
+    assert is_sorted(elems_1[dimension_order[0]])
 
     for i in range(len(elems_1[dimension_order[0]])):
         # Allowable indices is a list that maps the indices that
