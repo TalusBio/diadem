@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -25,14 +27,14 @@ def ppm_to_delta_mass(obs: float, ppm: float) -> float:
 
 # @profile
 def _deisotope_with_ims_arrays(
-    mzs,
-    intensities,
-    imss=None,
-    max_charge=5,
-    ims_tolerance=0.01,
-    mz_tolerance=0.01,
-    track_indices=False,
-):
+    mzs: NDArray[np.float32],
+    intensities: NDArray[np.float32],
+    imss: NDArray[np.float32] | None = None,
+    max_charge: int = 5,
+    ims_tolerance: float = 0.01,
+    mz_tolerance: float = 0.01,
+    track_indices: bool = False,
+) -> dict[str, NDArray[np.float32]]:
     """Deisotope a spectrum with IMS data.
 
     The current implementation allows only absolute values for the ims and mz
@@ -135,7 +137,7 @@ def _deisotope_with_ims_arrays(
                     # intensity now bleongs to another peak).
 
     f_peaks = _filter_peaks(peaks, extract=extract_values)
-    f_peaks = {k: v for k, v in zip(extract_values, f_peaks)}
+    f_peaks = dict(zip(extract_values, f_peaks))
     return f_peaks
 
 
@@ -176,7 +178,7 @@ def deisotope(
     (array([800.9  , 803.408]), array([1. , 2.4]))
     >>> deisotope(my_mzs, my_intens, max_charge=2, diff=5.0, unit="ppm", track_indices=True)
     (array([800.9  , 803.408]), array([1. , 2.4]), ([0], [1, 2, 3]))
-    """
+    """  # noqa:
     if unit.lower() == "da":
         mz_tolerance = diff
 
@@ -251,7 +253,7 @@ def deisotope_with_ims(
     >>> deisotope_with_ims(my_mzs, my_intens, my_imss, max_charge=2,
     ... mz_diff=5.0, mz_unit="ppm", ims_diff=0.01, ims_unit="abs", track_indices=True)
     (array([800.9  , 803.408, 803.409]), array([1. , 2.1, 1.4]), array([0.7, 0.7, 0.8]), ([0], [1, 3, 5], [2, 4]))
-    """
+    """  # noqa E501
     if mz_unit.lower() == "da":
         mz_tolerance = mz_diff
 

@@ -751,7 +751,7 @@ class IndexedDb:
             dms = np.abs(dms - fragment_mz)
             candidates = [x for x, y in zip(candidates, dms <= ms2_tol) if y]
 
-            for (seq, frag, series), dm in zip(candidates, dms):
+            for (seq, _frag, series), dm in zip(candidates, dms):
                 # Should tolerances be checked here?
                 # IN THEORY, they should have been filtered in the past.
                 peaks.append(

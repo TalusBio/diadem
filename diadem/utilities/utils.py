@@ -91,6 +91,7 @@ def make_decoy(pep: Peptide) -> Peptide:
     return pep
 
 
+# @profile
 def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
     """Gets the slide indices that include a range.
 
@@ -125,7 +126,7 @@ def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
     # slice_max = np.searchsorted(arr[slice_min:], maxval, side="right")
     # slice_max = slice_min + slice_max
     i = 0
-    for i, val in enumerate(arr[slice_min:]):
+    for _i, val in enumerate(arr[slice_min:]):
         if val > maxval:
             break
 

@@ -262,8 +262,8 @@ def find_neighbors_sorted(
 ) -> IndexBipartite:
     """Finds neighbors between to sorted arrays.
 
-    Arguments:
-    ---------
+    Parameters
+    ----------
     x, NDArray:
         First array to use to find neighbors
     y, NDArray:
@@ -280,8 +280,19 @@ def find_neighbors_sorted(
     low_dist:
         Highest value allowable as a distance for two elements
         to be considered neighbors
+    high_dist:
+        Highest value allowable as a distance for two elements.
+    allowed_neighbors:
+        A dictionary that contains the allowed neighbors for each
+        element in `x`. The keys of the dictionary are the indices
+        of the elements in `x` and the values are sets that contain
+        the indices of the elements in `y` that are allowed to be
+        neighbors of the element in `x`. If this is None then all
+        elements in `y` are allowed to be neighbors of the elements
+        in `x`.
 
-    Examples:
+
+    Examples
     --------
     >>> x = np.array([1.,2.,3.,4.,5.,15.,25.])
     >>> y = np.array([1.1, 2.3, 3.1, 4., 25., 25.1])
@@ -293,7 +304,7 @@ def find_neighbors_sorted(
       right_neighbors={0: [0], 2: [2], 3: [3], 4: [6], 5: [6]})
     >>> find_neighbors_sorted(x,y,dist_fun,low_dist, high_dist, allowed_neighbors={6: {5, 4}})
     IndexBipartite(left_neighbors={6: [4, 5]}, right_neighbors={4: [6], 5: [6]})
-    """
+    """  # noqa: E501
     assert is_sorted(x)
     assert is_sorted(y)
     assert low_dist < high_dist
@@ -365,15 +376,17 @@ def find_neighbors_multi_vectorized(
     In addition it (in theory) does some of the merging operations in a vectorized
     manner, which should be faster due to the overhead of cpu-cache moving overhead.
 
-    Arguments:
-    ---------
-    x, y list[NDArray]:
+    Parameters
+    ----------
+    x, list[NDArray]:
         List of arrays to use to find neighbors.
         the two lists need to be the same length and the length of each element in
         each of the lists needs to be the same length.
         For example: if x is a list of 5 arrays, each of length 200; then y needs to
         be a list of 5 arrays, but the length of each sub-array can be any length
         (as long as they are all the same...).
+    y, list[NDArray]:
+        See the description of x.
     dist_funs, list[callable]:
         List of functions to calculate the distance between an element
         in `x` and an element in `y`.
@@ -390,7 +403,7 @@ def find_neighbors_multi_vectorized(
         List of highest value allowable as a distance for two elements
         to be considered neighbors.
 
-    Returns:
+    Returns
     -------
     IndexBipartite:
         The neighbors found between the two arrays.
@@ -432,8 +445,8 @@ def find_neighbors_vectorized(
     distances between elements, BUT due to vectorization, cpu caching
     and not going through the iteration in python.
 
-    Arguments:
-    ---------
+    Parameters
+    ----------
     x, NDArray:
         First array to use to find neighbors
     y, NDArray:
@@ -447,11 +460,11 @@ def find_neighbors_vectorized(
     low_dist:
         Lowest value allowable as a distance for two elements
         to be considered neighbors
-    low_dist:
+    high_dist:
         Highest value allowable as a distance for two elements
         to be considered neighbors
 
-    Examples:
+    Examples
     --------
     >>> x = np.array([1.,2.,3.,4.,5.,15.,25.])
     >>> y = np.array([1.1, 2.3, 3.1, 4., 25., 25.1])
@@ -520,9 +533,11 @@ def multidim_neighbor_search(
 ) -> IndexBipartite:
     """Searches for neighbors in multiple dimensions.
 
-    Arguments:
-    ---------
-    elems1 and elems2, dict[str,NDArray]:
+    Parameters
+    ----------
+    elems1, dict[str,NDArray]:
+        Seel elems2
+    elems2, dict[str,NDArray] | None:
         A dictionary of arrays.
         All arrays within one of those elements need to have the same
         length.
@@ -534,7 +549,7 @@ def multidim_neighbor_search(
     dimension_order, optional str:
         Optional tuple of strings denoting what dimensions to use.
 
-    Examples:
+    Examples
     --------
     >>> x1 = {"d1": np.array([1000., 1000., 2001., 3000.]),
     ...    "d2": np.array([1000., 1000.3, 2000., 3000.01])}
@@ -545,8 +560,8 @@ def multidim_neighbor_search(
     >>> multidim_neighbor_search(
     ...    x1, x2, d_ranges, d_funs
     ... )
-    IndexBipartite(left_neighbors={0: [0, 1]}, right_neighbors={0: [0], 1: [0]})
-    """
+    IndexBipartite(left_neighbors={0: {0, 1}, 2: {2}}, right_neighbors={0: {0}, 1: {0}, 2: {2}})
+    """  # noqa: E501
     if dimension_order is None:
         dimension_order = list(elems1.keys())
 
@@ -594,7 +609,16 @@ def _multidim_neighbor_search(
     dist_ranges: dict[str, tuple[float, float]],
     dist_funs: dict[str, callable],
     dimension_order: tuple[str],
-):
+) -> IndexBipartite:
+    """Searches for neighbors in multiple dimensions.
+
+    This internal function is used by `multidim_neighbor_search` and
+    is not intended to be used directly. Since it does not have the
+    safety guarantees that the public function has.
+
+    For the parameters deltails please check the documentation of the
+    public function.
+    """
     neighbors = IndexBipartite()
     # ii = 0
     assert is_sorted(elems_1[dimension_order[0]])

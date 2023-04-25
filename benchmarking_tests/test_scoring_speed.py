@@ -31,7 +31,7 @@ def fake_prefiltered_database(fake_database: IndexedDb, request):
 
 def score_all_specs_open(db: IndexedDb, specs):
     """Helper function that scores all the spectra passed as tuples with a database."""
-    for mzs, ints, prec_mz in tqdm(specs):
+    for mzs, ints, _prec_mz in tqdm(specs):
         db.hyperscore(precursor_mz=(700.0, 720.0), spec_int=ints, spec_mz=mzs)
 
 

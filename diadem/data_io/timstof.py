@@ -30,6 +30,11 @@ from diadem.search.metrics import get_ref_trace_corrs
 from diadem.utilities.neighborhood import multidim_neighbor_search
 from diadem.utilities.utils import is_sorted
 
+if "PLOTDIADEM" in os.environ:
+    import random  # noqa: I001
+
+    from matplotlib import pyplot as plt
+
 IMSError = Literal["abs", "pct"]
 
 
@@ -287,7 +292,7 @@ class TimsScanGroup(ScanGroup):
         if len(self.imss) != len(self.mzs):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
-    def as_dataframe(self):
+    def as_dataframe(self) -> pd.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -501,6 +506,22 @@ class TimsSpectrumStacker(SpectrumStacker):
         return out
 
     def get_iso_window_groups(self, workerpool: None | Parallel) -> list[TimsScanGroup]:
+        """Get scan groups for each unique isolation window.
+
+        Parameters
+        ----------
+        workerpool : None | Parallel
+            If None, the function will be run in serial mode.
+            If Parallel, the function will be run in parallel mode.
+            The Parallel is created using joblib.Parallel.
+
+        Returns
+        -------
+        list[TimsScanGroup]
+            A list of TimsScanGroup objects.
+            Each of them corresponding to an unique isolation window from
+            the quadrupole.
+        """
         results = []
 
         if workerpool is None:
@@ -521,10 +542,12 @@ class TimsSpectrumStacker(SpectrumStacker):
         return results
 
     def yield_iso_window_groups(self, progress: bool = True) -> Iterator[TimsScanGroup]:
+        """Yield scan groups for each unique isolation window."""
         for i in self.unique_precursor_indices:
             nested_results = self._precursor_iso_window_groups(i, progress=progress)
             for r in nested_results.values():
-                breakpoint()
+                # TODO add here a the export of the cached windows
+                # maybe ... or just add a full interface to read this from cache...
                 yield r
 
 
@@ -661,7 +684,7 @@ def _get_precursor_index_windows(
         bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}",
     )
     quad_splits = {}
-    for i, (startind, endind) in enumerate(pbar):
+    for startind, endind in pbar:
         contig_peak_data = dia_data.convert_from_indices(
             inds[startind:endind],
             raw_indices_sorted=True,
@@ -708,18 +731,6 @@ def _get_precursor_index_windows(
                 zip(peak_data_vals, curr_peak_data[peak_data_vals].T.values),
             )
 
-            # # TODO check if it would be more efficient to check for breaks in
-            # # the quad values and then iterate over the breaks, instead if making it
-            # # a pandas df and grouping.
-            # grouped = df_peak_data.groupby(grouping_vals)
-            # for i, curr_peak_data in grouped:
-            #     current_chunk_data = { k:v for k,v in zip(grouping_vals, i) }
-            #     current_chunk_data["scan_indices"] = current_chunk_data["quad_indices"]
-
-            #     curr_peak_data.reset_index(drop=True, inplace=True)
-            #     peak_data = dict(
-            #         zip(curr_peak_data.columns, curr_peak_data.T.values)
-            #     )
             start_len = len(peak_data["mz_values"])
 
             if not len(peak_data["mz_values"]):
@@ -773,13 +784,13 @@ def _get_precursor_index_windows(
     return quad_splits
 
 
-import random
-
-from matplotlib import pyplot as plt
-
-
 # @profile
-def _preprocess_ims(ims_values, mz_values, intensity_values, mz_range=None):
+def _preprocess_ims(
+    ims_values: NDArray[np.float32],
+    mz_values: NDArray[np.float32],
+    intensity_values: NDArray[np.float32],
+    mz_range: None | tuple[float, float] = None,
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
     # TODO make all of these arguments
     # or make this callable class.
     PRELIM_N_PEAK_FILTER = 5_000  # noqa
@@ -951,13 +962,13 @@ def _collapse_seeds(
 
 # @profile
 def collapse_ims(
-    ims_values,
-    mz_values,
-    intensity_values,
-    top_n=500,
-    top_n_pct=0.2,
-    ims_tol=0.01,
-    mz_tol=0.01,
+    ims_values: NDArray[np.float32],
+    mz_values: NDArray[np.float32],
+    intensity_values: NDArray[np.float32],
+    top_n: int = 500,
+    top_n_pct: float = 0.2,
+    ims_tol: float = 0.01,
+    mz_tol: float = 0.01,
 ) -> dict[str, NDArray[np.float32]]:
     """Collapses peaks with similar IMS and MZ.
 
@@ -1005,42 +1016,12 @@ def collapse_ims(
     )
 
     if top_indices is not None:
-        tmp_neighborhoods = {top_indices[k]: v for k, v in tmp.right_neighbors.items()}
-        for k in tmp_neighborhoods:
-            tmp_neighborhoods[k].add(k)
+        neighborhoods = {top_indices[k]: v for k, v in tmp.right_neighbors.items()}
+        for k in neighborhoods:
+            # TODO check if passing the set directly works
+            neighborhoods[k].add(k)
     else:
-        tmp_neighborhoods = tmp.right_neighbors
-
-    ## New implementation end
-
-    # TODO delete this section one the new implementation is stably tested
-    # neighborhoods = find_neighbors_mzsort(
-    #     ims_vals=ims_values,
-    #     sorted_mz_values=mz_values,
-    #     intensities=intensity_values,
-    #     top_n=top_n,
-    #     top_n_pct=top_n_pct,
-    #     ims_tol=ims_tol,
-    #     mz_tol=mz_tol,
-    # )
-    # for k, v in tmp_neighborhoods.items():
-    #     try:
-    #         assert set(neighborhoods[k]) == set(v)
-    #     except AssertionError:
-    #         print(
-    #             "new implementation key: ", k,
-    #             "new implementation values: ", v,
-    #             "old implementation neighbors: ", neighborhoods[k],
-    #             "new implementation errors: ",  mz_values[k] - mz_values[list(v)],
-    #             "old implementation errors: ",  mz_values[k] - mz_values[list(neighborhoods[k])],
-    #             "old implementation mistakes: ",  np.abs(mz_values[k] - mz_values[list(neighborhoods[k])]) < mz_tol,
-    #             "new implementation errors: ",  ims_values[k] - ims_values[list(v)],
-    #             "old implementation errors: ",  ims_values[k] - ims_values[list(neighborhoods[k])],
-    #             "old implementation mistakes: ",  np.abs(ims_values[k] - ims_values[list(neighborhoods[k])]) < ims_tol,
-    #             sep="\n"
-    #         )
-    #         breakpoint()
-    neighborhoods = tmp_neighborhoods
+        neighborhoods = tmp.right_neighbors
 
     # unambiguous = {k for k, v in neighborhoods.items() if len(v) == 1}
     ambiguous = {k: v for k, v in neighborhoods.items() if len(v) > 1}
@@ -1066,10 +1047,6 @@ def collapse_ims(
         # This generates the weighted average of the ims and mz
         # as the new values for the peak.
         bundled["intensity"][i] = (tot_intensity := v_intensities.sum())
-        # highest_intensity = v_intensities.argmax()
-        # bundled["ims"][i] = ims_values[v[highest_intensity]]
-        # bundled["mz"][i] = mz_values[v[highest_intensity]]
-
         bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
         bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
 

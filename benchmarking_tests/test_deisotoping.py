@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from numpy import array
 
@@ -25,7 +27,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     1600: array(
         [
@@ -42,7 +44,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     1800: array(
         [
@@ -60,7 +62,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     2000: array(
         [
@@ -78,7 +80,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     2200: array(
         [
@@ -97,7 +99,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     2400: array(
         [
@@ -116,7 +118,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     2600: array(
         [
@@ -136,7 +138,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     2800: array(
         [
@@ -156,7 +158,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     3000: array(
         [
@@ -176,7 +178,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     3200: array(
         [
@@ -197,7 +199,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     3400: array(
         [
@@ -218,7 +220,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     3600: array(
         [
@@ -239,7 +241,7 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
     3800: array(
         [
@@ -261,13 +263,13 @@ average_distributions = {
             0.000,
             0.000,
             0.000,
-        ]
+        ],
     ),
 }
 
 max_len = max([len(x) for x in average_distributions.values()])
 average_distributions_array = np.array(
-    [np.pad(x, (0, max_len - len(x))) for x in average_distributions.values()]
+    [np.pad(x, (0, max_len - len(x))) for x in average_distributions.values()],
 )
 
 
@@ -282,7 +284,11 @@ def mass_to_dist(mass):
 
 
 def make_isotope_envelope_vectorized(
-    mz, charge, intensity, min_intensity, ims: np.ndarray | None = None
+    mz,
+    charge,
+    intensity,
+    min_intensity,
+    ims: np.ndarray | None = None,
 ):
     """Make an isotopic envelope for a given mz, charge, and intensity.
 
@@ -299,7 +305,7 @@ def make_isotope_envelope_vectorized(
     >>> out = make_isotope_envelope_vectorized(mzs, charges, ints, 100, ims=np.array([1.0, 2.0]))
     >>> out
     (array([300.    , 301.003 , 300.    , 300.5015]), array([1000.,  108., 1000.,  326.]), array([1., 1., 2., 2.]))
-    """
+    """  # noqa: E501
     dist = average_distributions_array[((mz * charge) // 200).astype(int)]
     dist = np.einsum("ij, i -> ij", dist, intensity)
 
@@ -323,7 +329,13 @@ def make_isotope_envelope_vectorized(
 
 
 def simulate_isotopes(
-    min_mz, max_mz, num_peaks, min_charge, max_charge, min_intensity, max_intensity
+    min_mz,
+    max_mz,
+    num_peaks,
+    min_charge,
+    max_charge,
+    min_intensity,
+    max_intensity,
 ):
     """Simulate a set of isotopic peaks."""
     mzs = np.random.uniform(min_mz, max_mz, num_peaks)
@@ -331,7 +343,10 @@ def simulate_isotopes(
     charges = np.random.randint(min_charge, max_charge, size=num_peaks)
 
     mzs, intensities = make_isotope_envelope_vectorized(
-        mzs, charges, ints, min_intensity
+        mzs,
+        charges,
+        ints,
+        min_intensity,
     )
 
     return mzs, intensities
@@ -354,7 +369,10 @@ def simulate_isotopes_ims(
     charges = np.random.randint(min_charge, max_charge, size=num_peaks)
 
     mzs, intensities = make_isotope_envelope_vectorized(
-        mzs, charges, ints, min_intensity
+        mzs,
+        charges,
+        ints,
+        min_intensity,
     )
 
     return mzs, intensities
@@ -373,7 +391,9 @@ def _split_ims(ims: float, intensity: float, ims_std: float, ims_binwidth=0.002)
     """
     ims_out = np.random.normal(ims, ims_std, size=int(np.sqrt(intensity)) + 1)
     ims_intensity = np.random.uniform(
-        0, 2 * (intensity) / len(ims_out), size=len(ims_out)
+        0,
+        2 * (intensity) / len(ims_out),
+        size=len(ims_out),
     )
     ims_intensity_out = np.histogram(
         ims_out,
@@ -459,9 +479,9 @@ def add_noise(values, snr):
 def jitter_values(values, std):
     """Jitter a set of values.
 
-    The values are jittered by adding a random number to each value. The random number is
-    drawn from a normal distribution with a standard deviation equal to the standard deviation
-    of the values.
+    The values are jittered by adding a random number to each value. The random number
+    is drawn from a normal distribution with a standard deviation equal to the standard
+    deviation of the values.
     """
     noise = np.random.normal(0, std, size=len(values))
     return values + noise
@@ -507,7 +527,6 @@ def noisy_simple_spectrum():
 # noisy complicated spectrum
 def noisy_complicated_spectrum():
     npeaks = 5_000
-    pct_noise = 0.2
 
     mzs, ints = simulate_isotopes(
         1000,

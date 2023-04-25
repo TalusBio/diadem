@@ -21,7 +21,7 @@ from diadem.utilities.utils import plot_to_log
 
 
 # @profile
-def search_group(
+def search_group(  # noqa C901 `search_group` is too complex (18)
     group: ScanGroup | TimsScanGroup,
     db: IndexedDb,
     config: DiademConfig,
@@ -168,6 +168,10 @@ def search_group(
                 top_n=100,
             )
 
+            # TODO: implement here a
+            # partial ms2-score and then a follow up
+            # ms1 score
+
             # if scores is not None:
             #     rt = group.retention_times[new_stack.ref_index]
             #     prec_intensity, prec_dms = group.get_precursor_evidence(
@@ -177,7 +181,9 @@ def search_group(
             #         mz_tolerance_unit=MS1_TOLERANCE_UNIT,
             #     )
             #     scores["PrecursorIntensity"] = prec_intensity
-            #     scores.drop(scores[scores.PrecursorIntensity < 100].index, inplace = True)
+            #     scores.drop(
+            #         scores[scores.PrecursorIntensity < 100].index,
+            #         inplace = True)
             #     scores.reset_index(drop=True, inplace=True)
             #     scores["rank"] = scores["Score"].rank(ascending=False, method="min")
             #     if len(scores) == 0:

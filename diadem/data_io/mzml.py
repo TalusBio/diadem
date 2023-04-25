@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -71,7 +72,7 @@ class ScanGroup:
             title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
         )
 
-    def as_dataframe(self):
+    def as_dataframe(self) -> pd.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -201,16 +202,36 @@ class ScanGroup:
         rt: float,
         mzs: NDArray[np.float32],
         mz_tolerance: float,
-        mz_tolerance_unit="ppm",
-    ):
-        # NOTE: This is a first implementation of the functionality,
-        # therefore it is very simple and prone to optimization and
-        # rework.
+        mz_tolerance_unit: Literal["ppm", "Da"] = "ppm",
+    ) -> tuple[NDArray[np.float32], list[NDArray[np.float32]]]:
+        """Finds precursor information for a given RT and m/z.
 
-        # 1. Find the closest RT.
-        # 2. Find if there are peaks that match the mzs.
-        # 3. Return a list of dm and a list of intensities for each.
+        NOTE: This is a first implementation of the functionality,
+        therefore it is very simple and prone to optimization and
+        rework.
 
+        1. Find the closest RT.
+        2. Find if there are peaks that match the mzs.
+        3. Return a list of dm and a list of intensities for each.
+
+        Parameters
+        ----------
+        rt : float
+            The retention time to find precursor information for.
+        mzs : NDArray[np.float32]
+            The m/z values to find precursor information for.
+        mz_tolerance : float
+            The m/z tolerance to use when finding precursor information.
+        mz_tolerance_unit : str, optional
+            The unit of the m/z tolerance, by default "ppm"
+
+        Returns
+        -------
+        tuple[NDArray[np.float32], list[NDArray[np.float32]]]]
+            A array with the list of intensities and a list arrays,
+            each of which is the for the values integrated for the
+            intensity values.
+        """
         index = np.searchsorted(self.precursor_rts, rt)
         slc, center_index = slice_from_center(
             index,
@@ -620,6 +641,24 @@ class SpectrumStacker:
         ms2_chunk: DataFrame,
         ms1_chunk: DataFrame,
     ) -> ScanGroup:
+        """Gets all spectra that share the same window.
+
+        Gets all spectra that share the same iso window
+        and creates a ScanGroup for them.
+
+        Meant for internal usage.
+
+        Parameters
+        ----------
+        iso_window_name : str
+            Name of the isolation window.
+        iso_window : tuple[float, float]
+            Isolation window.
+        ms2_chunk : DataFrame
+            DataFrame containing all MS2 spectra.
+        ms1_chunk : DataFrame
+            DataFrame containing all MS1 spectra.
+        """
         (
             window_mzs,
             window_ints,
@@ -702,8 +741,10 @@ class SpectrumStacker:
         grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
         precursor_info = self.ms1info
 
-        for i, (iso_window, chunk) in enumerate(
-            tqdm(grouped, disable=not progress, desc="Unique Isolation Windows"),
+        for iso_window, chunk in tqdm(
+            grouped,
+            disable=not progress,
+            desc="Unique Isolation Windows",
         ):
             iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
 
