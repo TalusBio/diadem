@@ -17,6 +17,7 @@ cli.diadem_main(
         run_min_correlation_score=0.5,
         run_min_intensity_ratio=0.01,
         peptide_mz_range=(400, 2000),
+        run_scalin_limits=(0, 0.8),
     ),
     out_prefix="lineprofile_results_tims/results",
 )

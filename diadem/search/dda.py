@@ -25,7 +25,10 @@ def score(db: IndexedDb, spec: Spectrum, mzml_stem: str) -> DataFrame | None:
     if spec is None:
         return None
     spec_results = db.hyperscore(
-        spec.precursor_mz, spec_mz=spec.mz, spec_int=spec.intensity, top_n=10
+        spec.precursor_mz,
+        spec_mz=spec.mz,
+        spec_int=spec.intensity,
+        top_n=10,
     )
     if spec_results is not None:
         spec_results["ScanID"] = f"{mzml_stem}::{spec.extras['id']}"
@@ -75,7 +78,10 @@ def dda_main(
         if spec is None:
             continue
         spec_results = db.hyperscore(
-            spec.precursor_mz, spec_mz=spec.mz, spec_int=spec.intensity, top_n=10
+            spec.precursor_mz,
+            spec_mz=spec.mz,
+            spec_int=spec.intensity,
+            top_n=10,
         )
         if spec_results is not None:
             spec_results["ScanID"] = f"{mzml_stem}::{spec.extras['id']}"

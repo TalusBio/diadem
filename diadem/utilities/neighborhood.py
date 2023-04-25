@@ -252,157 +252,6 @@ class NeighborFinder:
 
 
 # @profile
-def multidim_neighbor_search(
-    elems1: dict[str, NDArray],
-    elems2: dict[str, NDArray],
-    dist_ranges: dict[str, tuple[float, float]],
-    dist_funs: None | dict[str, callable] = None,
-    order: None | tuple[str] = None,
-    force_vectorized: bool = False,
-) -> IndexBipartite:
-    """Searches for neighbors in multiple dimensions.
-
-    Arguments:
-    ---------
-    elems1 and elems2, dict[str,NDArray]:
-        A dictionary of arrays.
-        All arrays within one of those elements need to have the same
-        length.
-    dist_ranges, dict[str, tuple[float, float]]:
-        maximum and minimum ranges for each of the dimensions.
-    dist_funs:
-        Dictionary of functions used to calculate distances.
-        For details check the documentation of `find_neighbors_sorted`
-    order, optional str:
-        Optional tuple of strings denoting what dimensions to use.
-    force_vectorized, bool
-        Whether to force the use of the vectorized version of the
-        matching functions.
-        This in theory will be slower, but bypasses iterating in cpython.
-
-    Examples:
-    --------
-    >>> x1 = {"d1": np.array([1000., 1000., 2001., 3000.]),
-    ...    "d2": np.array([1000., 1000.3, 2000., 3000.01])}
-    >>> x2 = {"d1": np.array([1000.01, 1000.01, 2000., 3000.]),
-    ...    "d2": np.array([1000.01, 1000.01, 2000., 3001.01])}
-    >>> d_funs = {"d1": lambda x,y: 1e6 * (y-x)/x, "d2": lambda x,y: y-x}
-    >>> d_ranges = {"d1": (-10, 10), "d2": (-0.02, 0.02)}
-    >>> multidim_neighbor_search(
-    ...    x1, x2, d_ranges, d_funs
-    ... )
-    IndexBipartite(left_neighbors={0: [0, 1]}, right_neighbors={0: [0], 1: [0]})
-    >>> multidim_neighbor_search(
-    ...    x1, x2, d_ranges, d_funs, force_vectorized=True
-    ... )
-    IndexBipartite(left_neighbors={0: [0, 1]}, right_neighbors={0: [0], 1: [0]})
-    """
-    if order is None:
-        order = list(elems1)
-
-    # This makes sure all elements are the same length
-    array_length_x = len(elems1[order[0]])
-    array_length_y = len(elems1[order[0]])
-    assert all(len(elems1[e]) == array_length_x for e in order)
-    assert all(len(elems2[e]) == array_length_y for e in order)
-
-    if not force_vectorized:
-        xi = np.arange(array_length_x)
-        yi = np.arange(array_length_y)
-        last_graph = None
-
-        for curr in order:
-            x = elems1[curr]
-            y = elems2[curr]
-            dist_fun = _default_dist_fun if dist_funs is None else dist_funs[curr]
-
-            # Filter to keep only the allowable matches
-            # x = x[xi]
-            # y = y[yi]
-
-            # Sort the x and y arrays, keeping track of the original order
-            # For example:
-            #     if the array x is [6,7,2]
-            #     the sorted array would [2,6,7]
-            #     the order would be [2, 0, 1]
-            #     and therefore to get the original index of element 1 in the sorted
-            #     array (6) one would use ...
-            #     order_array[i] (0 in this case)
-            x_order = np.argsort(x, kind="stable")
-            y_order = np.argsort(y, kind="stable")
-
-            # This allowed neighbors have indices that correspond to the original
-            # array, not the sorted array, therefore we need to use the order array
-            # to get the correct indices.
-            if last_graph is None:
-                allowed_neighbors = None
-            else:
-                allowed_neighbors = last_graph.left_neighbors
-                # x_order[k] being k 1 is the index of the lowest element,
-                # not the position of element k in the sorted array
-
-                # So we need an inverted order array
-                inv_x_order = np.argsort(x_order, kind="stable")
-                inv_y_order = np.argsort(y_order, kind="stable")
-                allowed_neighbors = {
-                    inv_x_order[k]: inv_y_order[v] for k, v in allowed_neighbors.items()
-                }
-
-            neighbors = find_neighbors_sorted(
-                x[x_order],
-                y[y_order],
-                dist_fun=dist_fun,
-                low_dist=dist_ranges[curr][0],
-                high_dist=dist_ranges[curr][1],
-                allowed_neighbors=allowed_neighbors,
-            )
-            t_xi, t_yi = neighbors.get_matching_indices()
-            if len(t_xi) == 0 or len(t_yi) == 0:
-                # Handles the case where no neighbors are possible
-                return IndexBipartite()
-            o_xi = xi[x_order[t_xi]]
-            o_yi = yi[y_order[t_yi]]
-
-            # xi = xi[x_order[np.unique(t_xi)]]
-            # yi = yi[y_order[np.unique(t_yi)]]
-
-            orig_index_graph = IndexBipartite.from_arrays(o_xi, o_yi)
-
-            # Get the indices of x and y in the raw array
-            if last_graph is None:
-                last_graph = orig_index_graph
-            else:
-                last_graph = last_graph.intersect(orig_index_graph)
-
-    else:
-        # Since the vectorzed version greedily computes all distances,
-        # This version can be optimized by not subsetting on every iteration.
-        # And just calculating all distances and checking which are in range.
-        # And then combining the results.
-        # This is in theory faster because it avoids the overhead of the
-        # subsetting and tracking indices.
-        if dist_funs is None:
-            dist_funs = {o: _default_dist_fun for o in order}
-        dist_funs = [dist_funs[o] for o in order]
-        dist_ranges = [dist_ranges[o] for o in order]
-        low_ranges = [d[0] for d in dist_ranges]
-        high_ranges = [d[1] for d in dist_ranges]
-        xs = [elems1[o] for o in order]
-        ys = [elems2[o] for o in order]
-
-        neighbors = find_neighbors_multi_vectorized(
-            xs,
-            ys,
-            dist_funs=dist_funs,
-            low_dists=low_ranges,
-            high_dists=high_ranges,
-        )
-        last_graph = neighbors
-
-    return last_graph
-
-
-# @profile
 def find_neighbors_sorted(
     x: NDArray,
     y: NDArray,
@@ -458,7 +307,7 @@ def find_neighbors_sorted(
     if allowed_neighbors is None:
         iter_x = range(len(x))
     else:
-        iter_x = sorted(list(allowed_neighbors.keys()))
+        iter_x = sorted(allowed_neighbors.keys())
 
     for i in iter_x:
         x_val = x[i]
@@ -469,7 +318,7 @@ def find_neighbors_sorted(
         if allowed_neighbors is None:
             iter_y = range(ii, len(y))
         else:
-            iter_y = sorted(list(allowed_neighbors[i]))
+            iter_y = sorted(allowed_neighbors[i])
 
         for j in iter_y:
             y_val = y[j]

@@ -8,7 +8,10 @@ from diadem.index.protein_index import ProteinNGram
 
 
 def make_pin(
-    results: DataFrame, fasta_path: PathLike, mzml_path: PathLike, pin_path: PathLike
+    results: DataFrame,
+    fasta_path: PathLike,
+    mzml_path: PathLike,
+    pin_path: PathLike,
 ) -> None:
     """Makes a '.pin' file from a dataframe of results.
 

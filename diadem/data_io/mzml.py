@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml import Spectrum
@@ -69,6 +70,27 @@ class ScanGroup:
             self.base_peak_int,
             title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
         )
+
+    def as_dataframe(self):
+        """Returns a dataframe with the data in the group.
+
+        The dataframe has the following columns:
+        - mzs: list of mzs for each spectrum
+        - intensities: list of intensities for each spectrum
+        - retention_times: retention times for each spectrum
+        - precursor_start: start of the precursor range
+        - precursor_end: end of the precursor range
+        """
+        out = pd.DataFrame(
+            {
+                "mzs": self.mzs,
+                "intensities": self.intensities,
+                "rts": self.retention_times,
+            },
+        )
+        out["precursor_start"] = min(self.precursor_range)
+        out["precursor_end"] = max(self.precursor_range)
+        return out
 
     def get_highest_window(
         self,

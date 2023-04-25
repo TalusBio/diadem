@@ -81,7 +81,8 @@ def get_ref_trace_corrs(arr: NDArray[np.float32], ref_idx: int) -> NDArray[np.fl
     # ref_trace = np.stack([ref_trace, ref_trace[..., ::-1]]).min(axis=0)
     # ref_trace = np.stack([ref_trace, ref_trace[..., ::-1]]).min(axis=0)
     spec_angle_weights = spectral_angle(
-        normalized_arr.astype("float"), ref_trace.astype("float")
+        normalized_arr.astype("float"),
+        ref_trace.astype("float"),
     )
 
     return spec_angle_weights

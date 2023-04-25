@@ -287,6 +287,21 @@ class TimsScanGroup(ScanGroup):
         if len(self.imss) != len(self.mzs):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
+    def as_dataframe(self):
+        """Returns a dataframe with the data in the group.
+
+        The dataframe has the following columns:
+        - mzs: list of mzs for each spectrum
+        - intensities: list of intensities for each spectrum
+        - retention_times: retention times for each spectrum
+        - precursor_start: start of the precursor range
+        - precursor_end: end of the precursor range
+        - ims: list of ims values for each spectrum
+        """
+        out = super().as_dataframe()
+        out["ims"] = self.imss
+        return out
+
     def get_highest_window(
         self,
         window: int,
@@ -509,6 +524,7 @@ class TimsSpectrumStacker(SpectrumStacker):
         for i in self.unique_precursor_indices:
             nested_results = self._precursor_iso_window_groups(i, progress=progress)
             for r in nested_results.values():
+                breakpoint()
                 yield r
 
 
@@ -645,7 +661,7 @@ def _get_precursor_index_windows(
         bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}",
     )
     quad_splits = {}
-    for startind, endind in pbar:
+    for i, (startind, endind) in enumerate(pbar):
         contig_peak_data = dia_data.convert_from_indices(
             inds[startind:endind],
             raw_indices_sorted=True,
@@ -674,7 +690,8 @@ def _get_precursor_index_windows(
         peak_data_vals = ["mz_values", "corrected_intensity_values", "mobility_values"]
 
         g_inds, g_vals = get_break_indices(
-            df_peak_data["quad_indices"].array, min_diff=0
+            df_peak_data["quad_indices"].array,
+            min_diff=0,
         )
 
         for si, ei in zip(g_inds[:-1], g_inds[1:]):
@@ -688,7 +705,7 @@ def _get_precursor_index_windows(
             current_chunk_data["scan_indices"] = current_chunk_data["quad_indices"]
 
             peak_data = dict(
-                zip(peak_data_vals, curr_peak_data[peak_data_vals].T.values)
+                zip(peak_data_vals, curr_peak_data[peak_data_vals].T.values),
             )
 
             # # TODO check if it would be more efficient to check for breaks in
@@ -756,12 +773,18 @@ def _get_precursor_index_windows(
     return quad_splits
 
 
+import random
+
+from matplotlib import pyplot as plt
+
+
 # @profile
 def _preprocess_ims(ims_values, mz_values, intensity_values, mz_range=None):
     # TODO make all of these arguments
     # or make this callable class.
-    PRELIM_N_PEAK_FILTER = 10_000  # noqa
-    MIN_INTENSITY_KEEP = 50  # noqa
+    PRELIM_N_PEAK_FILTER = 5_000  # noqa
+    FINAL_N_PEAK_FILTER = 1000  # noqa
+    MIN_INTENSITY_KEEP = 500  # noqa
     MIN_NUM_SEEDS = 5_000  # noqa
     IMS_TOL = 0.01  # noqa
     # these tolerances are set narrow on purpose, since they
@@ -785,6 +808,26 @@ def _preprocess_ims(ims_values, mz_values, intensity_values, mz_range=None):
     mz_values = mz_values[sort_idx]
     intensity_values = intensity_values[sort_idx]
 
+    # Find highest peak, plot 4 mz and 0.3 IMS around it
+    if "PLOTDIADEM" in os.environ:
+        mz_range_val = 3
+        ims_range_val = 0.3
+        top_intense = np.argmax(intensity_values)
+        top_mz = mz_values[top_intense]
+        top_ims = ims_values[top_intense]
+        plot_mz_range = (top_mz - mz_range_val, top_mz + mz_range_val)
+        plot_ims_range = (top_ims - ims_range_val, top_ims + ims_range_val)
+
+        top_plot_filter = (
+            (mz_values > plot_mz_range[0])
+            & (mz_values < plot_mz_range[1])
+            & (ims_values > plot_ims_range[0])
+            & (ims_values < plot_ims_range[1])
+        )
+        o_plot_ims_values = ims_values[top_plot_filter]
+        o_plot_mz_values = mz_values[top_plot_filter]
+        o_plot_intensity_values = intensity_values[top_plot_filter]
+
     if mz_range is not None:
         mz_filter = slice(
             np.searchsorted(mz_values, mz_range[0]),
@@ -803,9 +846,6 @@ def _preprocess_ims(ims_values, mz_values, intensity_values, mz_range=None):
         ims_tol=IMS_TOL,
         mz_tol=MZ_TOL,
     )
-    filter = f["intensity"] > MIN_INTENSITY_KEEP
-    f = {k: v[filter] for k, v in f.items()}
-
     if len(f["mz"]) < 0:
         new_order = np.argsort(f["mz"])
         f = {k: v[new_order] for k, v in f.items()}
@@ -821,6 +861,56 @@ def _preprocess_ims(ims_values, mz_values, intensity_values, mz_range=None):
         mz_diff=MZ_TOL,
         max_charge=MAX_ISOTOPE_CHARGE,
     )
+    intensity = np.array(intensity)
+
+    if len(mz) < 0:
+        filter = intensity > MIN_INTENSITY_KEEP
+        mz = mz[filter]
+        intensity = intensity[filter]
+        ims = ims[filter]
+
+    if "PLOTDIADEM" in os.environ:
+        top_plot_filter = (
+            (mz > plot_mz_range[0])
+            & (mz < plot_mz_range[1])
+            & (ims > plot_ims_range[0])
+            & (ims < plot_ims_range[1])
+        )
+        plot_ims_values = ims[top_plot_filter]
+        plot_mz_values = mz[top_plot_filter]
+        plot_intensity_values = intensity[top_plot_filter]
+
+        plt.clf()
+        plt.scatter(
+            o_plot_mz_values,
+            o_plot_ims_values,
+            c="gray",
+            s=np.sqrt(o_plot_intensity_values),
+        )
+        plt.scatter(
+            plot_mz_values,
+            plot_ims_values,
+            c=plot_intensity_values,
+            cmap="viridis",
+            s=np.sqrt(plot_intensity_values),
+            alpha=0.8,
+        )
+        if np.sum(plot_intensity_values) > 1000:
+            if random.random() > 0.01:
+                plt.pause(0.1)
+            else:
+                plt.show()
+
+    if len(intensity) > FINAL_N_PEAK_FILTER:
+        partition_indices = np.argpartition(
+            intensity,
+            -FINAL_N_PEAK_FILTER,
+        )[-FINAL_N_PEAK_FILTER:]
+
+        ims = ims[partition_indices]
+        mz = mz[partition_indices]
+        intensity = intensity[partition_indices]
+
     return mz, intensity, ims
 
 
@@ -973,15 +1063,15 @@ def collapse_ims(
     for i, v in enumerate(out_seeds.values()):
         v = list(v)
         v_intensities = intensity_values[v]
-        highest_intensity = v_intensities.argmax()
         # This generates the weighted average of the ims and mz
         # as the new values for the peak.
         bundled["intensity"][i] = (tot_intensity := v_intensities.sum())
-        bundled["ims"][i] = ims_values[v[highest_intensity]]
-        bundled["mz"][i] = mz_values[v[highest_intensity]]
+        # highest_intensity = v_intensities.argmax()
+        # bundled["ims"][i] = ims_values[v[highest_intensity]]
+        # bundled["mz"][i] = mz_values[v[highest_intensity]]
 
-        # bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
-        # bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
+        bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
+        bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
 
     # # # TODO consider whether I really want to keep ambiduous matches
     # # # In theory I could keep only the expanded seeds.

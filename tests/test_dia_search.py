@@ -26,7 +26,8 @@ def test_dia_search_works_mzml(tmpdir, shared_datadir, parallel):
     peptides = {Peptide.from_sequence(x).stripped_sequence for x in df.Peptide.unique()}
 
     theo_table = pd.read_csv(
-        shared_datadir / "mzml/FGFR1_600_800_5min_peptide_table.tsv", sep="\t"
+        shared_datadir / "mzml/FGFR1_600_800_5min_peptide_table.tsv",
+        sep="\t",
     )
     theo_table = theo_table[
         theo_table["MS2 chromatographic points group_0_sample_0"] > 0

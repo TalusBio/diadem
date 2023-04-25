@@ -43,7 +43,6 @@ def _deisotope_with_ims_arrays(
 
     If imss is None, will assume there is no IMS dimension in the data.
     """
-
     if imss is None:
         peak_iter = zip(mzs, intensities)
         peaks = [

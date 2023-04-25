@@ -6,7 +6,8 @@ from diadem.data_io.timstof import TimsSpectrumStacker
 
 
 def read_raw_data(
-    filepath: PathLike, config: DiademConfig
+    filepath: PathLike,
+    config: DiademConfig,
 ) -> TimsSpectrumStacker | SpectrumStacker:
     """Generic function to read data for DIA.
 

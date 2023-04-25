@@ -15,7 +15,9 @@ def test_fasta_shows_in_db(shared_datadir):
     config = DiademConfig()
     ms2ml_config = config.ms2ml_config
     adapter = FastaAdapter(
-        shared_datadir / "BSA.fasta", config=ms2ml_config, only_unique=True
+        shared_datadir / "BSA.fasta",
+        config=ms2ml_config,
+        only_unique=True,
     )
     sequences = list(adapter.parse())
 
@@ -31,5 +33,5 @@ def test_fasta_shows_in_db(shared_datadir):
         score_df = db.hyperscore(ms1_range, spec_mz=mzs, spec_int=intens, top_n=2)
         score_df = score_df[np.invert(score_df["decoy"])]
         assert s.to_proforma() in list(
-            score_df["Peptide"]
+            score_df["Peptide"],
         ), f"Peptide i={i} {s.to_proforma()} not in db"
