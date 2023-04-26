@@ -126,9 +126,10 @@ def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
     # slice_max = np.searchsorted(arr[slice_min:], maxval, side="right")
     # slice_max = slice_min + slice_max
     i = 0
-    for _i, val in enumerate(arr[slice_min:]):
+    for val in arr[slice_min:]:
         if val > maxval:
             break
+        i += 1
 
     slice_max = slice_min + i
     return slice(slice_min, slice_max)

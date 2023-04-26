@@ -23,7 +23,7 @@ def test_dia_search_works_mzml(tmpdir, shared_datadir, parallel):
     expected_csv = out + ".diadem.csv"
     df = pd.read_csv(expected_csv)
     df = df[np.invert(df["decoy"])]
-    peptides = {Peptide.from_sequence(x).stripped_sequence for x in df.Peptide.unique()}
+    peptides = {Peptide.from_sequence(x).stripped_sequence for x in df.peptide.unique()}
 
     theo_table = pd.read_csv(
         shared_datadir / "mzml/FGFR1_600_800_5min_peptide_table.tsv",

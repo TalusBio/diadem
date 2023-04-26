@@ -849,12 +849,12 @@ class IndexedDb:
         indices_seqs_local = np.searchsorted(self.seq_ids, scores["id"].values)
         assert np.allclose(self.seq_ids[indices_seqs_local], scores["id"].values)
 
-        scores["Peptide"] = self.seqs[indices_seqs_local]
+        scores["peptide"] = self.seqs[indices_seqs_local]
         scores["PrecursorMZ"] = self.seq_prec_mzs[indices_seqs_local]
-        scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
+        scores["decoy"] = [s not in self.target_proforma for s in scores["peptide"]]
         try:
-            assert len(np.unique(scores["Peptide"])) == len(scores), np.unique(
-                scores["Peptide"],
+            assert len(np.unique(scores["peptide"])) == len(scores), np.unique(
+                scores["peptide"],
                 return_counts=True,
             )
         except AssertionError:

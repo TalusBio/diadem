@@ -16,7 +16,7 @@ def test_peptide_scoring(sample_peaks, albumin_peptides):
     db.index_from_sequences()
     # breakpoint()
     scores = db.hyperscore(z2_mass, mzs, ints)
-    assert "VPQVSTPTLVEVSR/2" in set(scores["Peptide"])
+    assert "VPQVSTPTLVEVSR/2" in set(scores["peptide"])
     return db
 
 
@@ -29,5 +29,5 @@ def test_database_from_fasta(shared_datadir, sample_peaks):
 
     mzs, ints, z2_mass = sample_peaks
     scores = db.hyperscore(z2_mass, mzs, ints)
-    assert "VPQVSTPTLVEVSR/2" in set(scores["Peptide"][np.invert(scores["decoy"])])
+    assert "VPQVSTPTLVEVSR/2" in set(scores["peptide"][np.invert(scores["decoy"])])
     return db
