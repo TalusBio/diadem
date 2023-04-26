@@ -280,6 +280,8 @@ def _bin_spectrum_intensities(
 
 @dataclass
 class TimsScanGroup(ScanGroup):
+    """Represent all 'spectra' that share an isolation window."""
+
     imss: list[NDArray]
     precursor_imss: list[NDArray]
 
@@ -318,6 +320,15 @@ class TimsScanGroup(ScanGroup):
         min_correlation: float,
         max_peaks: int,
     ) -> TimsStackedChromatograms:
+        """Gets the highest intensity window of the chromatogram.
+
+        Briefly ...
+        1. Gets the highes peak accross all spectra in the chromatogram range.
+        2. Finds what peaks are in that same spectrum.
+        3. Looks for spectra around that spectrum.
+        4. extracts the chromatogram for all mzs in the "parent spectrum"
+
+        """
         top_index = np.argmax(self.base_peak_int)
         window = TimsStackedChromatograms.from_group(
             self,
@@ -365,11 +376,23 @@ class TimsScanGroup(ScanGroup):
             self.base_peak_mz[i] = -1
 
     def __len__(self) -> int:
+        """Returns the number of spectra in the group."""
         return len(self.imss)
 
 
 class TimsSpectrumStacker(SpectrumStacker):
+    """Helper class that stacks the spectra of TimsTof file into chromatograms."""
+
     def __init__(self, filepath: PathLike, config: DiademConfig) -> None:
+        """Initializes the class.
+
+        Parameters
+        ----------
+        filepath : PathLike
+            Path to the TimsTof file
+        config : DiademConfig
+            Configuration object
+        """
         self.filepath = filepath
         self.config = config
         with self.lazy_datafile() as datafile:

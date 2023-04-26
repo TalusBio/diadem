@@ -124,7 +124,7 @@ class IndexBipartite:
             that match between them. For example element i in the
             array y is a neighbor of element i in array x.
 
-        Examples:
+        Examples
         --------
         >>> a = np.array([1,1,1,51])
         >>> b = np.array([2,3,4,1])
@@ -149,13 +149,13 @@ class IndexBipartite:
         other: IndexBipartite
             The other bipartite graph to intersect with.
 
-        Returns:
+        Returns
         -------
         IndexBipartite
             A new bipartite graph that contains the intersection of
             both graphs.
 
-        Examples:
+        Examples
         --------
         >>> bg1 = IndexBipartite()
         >>> bg1.add_connection(1,1)
@@ -502,13 +502,13 @@ def _apply_vectorized(x: NDArray, y: NDArray, fun: callable) -> NDArray:
     fun: callable
         Function to apply to all combinations of elements in x and y
 
-    Returns:
+    Returns
     -------
     NDArray
         Array of shape (len(x), len(y)) with the results of the function
         applied to all combinations of elements in x and y
 
-    Examples:
+    Examples
     --------
     >>> x = np.array([1.,5.,15.,25.])
     >>> y = np.array([1.1, 25.1])

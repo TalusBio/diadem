@@ -451,7 +451,7 @@ def extend_ims(seed_mzs, intensities, ims_start=0.7, ims_end=1.2, std_ims=0.01):
     )
 
 
-def simulate_ims_isotopes(
+def simulate_ims_isotopes(  # noqa: D103
     min_mz,
     max_mz,
     num_peaks,
@@ -462,7 +462,7 @@ def simulate_ims_isotopes(
     min_ims,
     max_ims,
 ):
-    pass
+    raise NotImplementedError
 
 
 def add_noise(values, snr):
@@ -502,7 +502,16 @@ def get_noise_peaks(mz_min, mz_max, ints, quantile, pct):
 
 
 # clean simple spectrum
-def clean_simple_spectrum():
+def clean_simple_spectrum() -> tuple[np.ndarray, np.ndarray]:
+    """Generate a clean simple spectrum.
+
+    Returns
+    -------
+    mzs : np.ndarray
+        The m/z values of the peaks.
+    intensities : np.ndarray
+        The intensities of the peaks.
+    """
     mzs, ints = simulate_isotopes(1000, 2000, 100, 1, 5, 1000, 10000)
     ints = add_noise(ints, 100)
     return mzs, ints
@@ -510,6 +519,15 @@ def clean_simple_spectrum():
 
 # clean complicated spectrum
 def clean_complicated_spectrum():
+    """Generate a clean simple spectrum.
+
+    Returns
+    -------
+    mzs : np.ndarray
+        The m/z values of the peaks.
+    intensities : np.ndarray
+        The intensities of the peaks.
+    """
     mzs, ints = simulate_isotopes(1000, 2000, 100, 1, 5, 1000, 10000)
     ints = add_noise(ints, 100)
     mzs = jitter_values(mzs, 0.01)
@@ -521,11 +539,29 @@ def clean_complicated_spectrum():
 
 # noisy simple spectrum
 def noisy_simple_spectrum():
-    pass
+    """Generate a noisy simple spectrum.
+
+    Returns
+    -------
+    mzs : np.ndarray
+        The m/z values of the peaks.
+    intensities : np.ndarray
+        The intensities of the peaks.
+    """
+    raise NotImplementedError
 
 
 # noisy complicated spectrum
 def noisy_complicated_spectrum():
+    """Generate a noisy complicated spectrum.
+
+    Returns
+    -------
+    mzs : np.ndarray
+        The m/z values of the peaks.
+    intensities : np.ndarray
+        The intensities of the peaks.
+    """
     npeaks = 5_000
 
     mzs, ints = simulate_isotopes(
@@ -537,6 +573,7 @@ def noisy_complicated_spectrum():
         min_intensity=1_000,
         max_intensity=100_000,
     )
+    raise NotImplementedError
 
 
 if __name__ == "__main__":
