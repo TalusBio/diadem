@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "diadem"
 authors = [
     {name = "Sebastian Paez", email = "spaez@talus.bio"},
-    {name = "William E. Fondrie", email = "wfrondie@talus.bio"},
     {name = "Carollyn Allen", email = "callen@talus.bio"},
+    {name = "William E. Fondrie", email = "wfrondie@talus.bio"},
 ]
 description = "A modular, feature-centric toolkit for DIA proteomics"
 requires-python = ">=3.9,<=3.12"
@@ -35,6 +35,7 @@ dependencies = [
     "brain-isotopic-distribution >= 1.5.11",
     "ms-peak-picker >= 0.1.40",
     "ms-deisotope >= 0.0.46",
+    "mokapot >= 0.9.1",
 ]
 dynamic = ["version"]
 
@@ -86,6 +87,8 @@ fix = true
 "*tests/*.py" = ["ANN"]
 # D104 is missing docstring in public package
 "**__init__.py" = ["D104"]
+# Implements a sklearn interface with X and X_hat variables/params.
+"diadem/aggregate/rt_model.py" = ["N803", "N806"]
 
 # ANN001 Missing type annotation for function argument
 # Ignoring in the cli since it is redundant with the click options

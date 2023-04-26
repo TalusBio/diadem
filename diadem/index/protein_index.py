@@ -84,7 +84,7 @@ class ProteinNGram:
         inv_alias = {}
 
         for i, entry in tqdm(
-            enumerate(FASTA(fasta_file)),
+            enumerate(FASTA(str(fasta_file))),
             disable=not progress,
             desc="Building peptide n-gram index",
         ):

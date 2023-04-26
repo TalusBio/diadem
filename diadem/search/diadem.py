@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 from diadem.config import DiademConfig
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.mzml import ScanGroup, SpectrumStacker, StackedChromatograms
-from diadem.search.search_utils import make_pin
+from diadem.search.mokapot import brew_run
 
 
 def plot_to_log(*args, **kwargs) -> None:  # noqa
@@ -132,7 +132,7 @@ def search_group(
             scores = None
 
         if scores is not None:
-            scores["id"] = match_id
+            scores["peak_id"] = match_id
             ref_peak_mz = new_stack.mzs[new_stack.ref_index]
 
             mzs = itertools.chain(
@@ -283,13 +283,12 @@ def diadem_main(
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
     results.to_parquet(prefix + ".parquet", index=False, engine="pyarrow")
-    make_pin(
+    mokapot_results = brew_run(
         results,
         fasta_path=fasta_path,
         mzml_path=mzml_path,
-        pin_path=prefix + ".tsv.pin",
     )
-
+    mokapot_results.to_parquet(prefix + ".peptides.parquet")
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Elapsed time: {elapsed_time}")

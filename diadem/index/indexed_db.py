@@ -774,7 +774,7 @@ class IndexedDb:
         indices_seqs_local = np.searchsorted(self.seq_ids, scores["id"].values)
         assert np.allclose(self.seq_ids[indices_seqs_local], scores["id"].values)
 
-        scores["Peptide"] = self.seqs[indices_seqs_local]
+        scores["peptide"] = self.seqs[indices_seqs_local]
         scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
 
         return scores
