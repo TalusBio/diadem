@@ -180,7 +180,7 @@ class TimsStackedChromatograms(StackedChromatograms):
             u_mzs, u_intensities, inv = _bin_spectrum_intensities(
                 m,
                 inten,
-                bin_width=0.02,
+                bin_width=0.001,
                 bin_offset=0,
             )
 

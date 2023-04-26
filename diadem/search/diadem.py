@@ -195,6 +195,9 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
 
         if scores is not None:
             scores["id"] = match_id
+            scores["RetentionTime"] = group.retention_times[new_stack.ref_index]
+            if hasattr(group, "imss"):
+                scores["IonMobility"] = new_stack.ref_ims
             if scores["decoy"].iloc[0]:
                 num_decoys += 1
             else:
