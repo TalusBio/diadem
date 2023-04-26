@@ -117,9 +117,11 @@ class IndexBipartite:
     def from_arrays(cls, x: NDArray, y: NDArray) -> IndexBipartite:
         """Builds a bipartite index from two arrays.
 
-        Arguments:
-        ---------
-        x, y: NDArray
+        Parameters
+        ----------
+        x: NDArray
+            See the documentation of y.
+        y: NDArray
             Two arrays of the same length that contain the indices
             that match between them. For example element i in the
             array y is a neighbor of element i in array x.
@@ -144,8 +146,8 @@ class IndexBipartite:
     def intersect(self, other: IndexBipartite) -> IndexBipartite:
         """Returns the intersection of two bipartite graphs.
 
-        Arguments:
-        ---------
+        Parameters
+        ----------
         other: IndexBipartite
             The other bipartite graph to intersect with.
 
@@ -322,8 +324,6 @@ def find_neighbors_sorted(
 
     for i in iter_x:
         x_val = x[i]
-        # if (abs(x_val - 0.8112) < 1e-4):
-        #     breakpoint()
         last_diff = None
 
         if allowed_neighbors is None:
@@ -334,11 +334,6 @@ def find_neighbors_sorted(
         for j in iter_y:
             y_val = y[j]
 
-            # if (abs(x_val - 401.7911) < 1e-4) & (abs(y_val - 401.8036) < 1e-4):
-            #     breakpoint()
-
-            # if (abs(x_val - 0.8112) < 1e-4) & (abs(y_val - 0.8085) < 1e-4):
-            #      breakpoint()
             diff = dist_fun(x_val, y_val)
 
             # TODO disable this for performance ...
@@ -355,172 +350,6 @@ def find_neighbors_sorted(
             assert diff <= high_dist and diff >= low_dist
             neighbors.add_connection(i, j)
     return neighbors
-
-
-def find_neighbors_multi_vectorized(
-    x: list[NDArray],
-    y: list[NDArray],
-    dist_funs: list[callable],
-    low_dists: list[float],
-    high_dists: list[float],
-) -> IndexBipartite:
-    """Finds Neighbors in multiple dimensions.
-
-    This is the generalized version of `find_neighbors_vectorized`.
-    This function allows for multiple dimensions to be used to find neighbors.
-
-    It is more efficient than calling the `find_neighbors_vectorized` function
-    multiple times because it does not require many intermediate representations
-    of the data.
-
-    In addition it (in theory) does some of the merging operations in a vectorized
-    manner, which should be faster due to the overhead of cpu-cache moving overhead.
-
-    Parameters
-    ----------
-    x, list[NDArray]:
-        List of arrays to use to find neighbors.
-        the two lists need to be the same length and the length of each element in
-        each of the lists needs to be the same length.
-        For example: if x is a list of 5 arrays, each of length 200; then y needs to
-        be a list of 5 arrays, but the length of each sub-array can be any length
-        (as long as they are all the same...).
-    y, list[NDArray]:
-        See the description of x.
-    dist_funs, list[callable]:
-        List of functions to calculate the distance between an element
-        in `x` and an element in `y`.
-        The list should be the same length as `x` and `y`.
-        Note that this asumes directionality and should increase in value.
-
-        In other words ...
-        dist_fun(x[0], y[0]) < dist_fun(x[0], y[1]); assuming that y[1] > y[0]
-    low_dists, list[float]:
-        List of lowest value allowable as a distance for two elements
-        to be considered neighbors.
-        The list should be the same length as `x` and `y`.
-    high_dists, list[float]:
-        List of highest value allowable as a distance for two elements
-        to be considered neighbors.
-
-    Returns
-    -------
-    IndexBipartite:
-        The neighbors found between the two arrays.
-    """
-    neighbors = IndexBipartite()
-    final_in_range = None
-
-    my_iter = zip(
-        x,
-        y,
-        dist_funs,
-        low_dists,
-        high_dists,
-    )
-    for xi, yi, dist_fun, low_dist, high_dist in my_iter:
-        diffs = _apply_vectorized(xi, yi, dist_fun)
-        in_range = (diffs > low_dist) & (diffs < high_dist)
-        if final_in_range is None:
-            final_in_range = in_range
-        else:
-            final_in_range = final_in_range & in_range
-
-    inds = np.where(final_in_range)
-    neighbors = IndexBipartite.from_arrays(*inds)
-    return neighbors
-
-
-def find_neighbors_vectorized(
-    x: NDArray,
-    y: NDArray,
-    dist_fun: callable,
-    low_dist: float,
-    high_dist: float,
-) -> IndexBipartite:
-    """Finds neighbors between to sorted arrays.
-
-    This version uses a vectorized version of the calculation.
-    In theory it should take longer, since it calculates all
-    distances between elements, BUT due to vectorization, cpu caching
-    and not going through the iteration in python.
-
-    Parameters
-    ----------
-    x, NDArray:
-        First array to use to find neighbors
-    y, NDArray:
-        Second array to use to find neighbors
-    dist_fun:
-        Function to calculate the distance between an element
-        in `x` and an element in `y`.
-        Note that this asumes directionality and should increase in value.
-        In other words ...
-        dist_fun(x[0], y[0]) < dist_fun(x[0], y[1]); assuming that y[1] > y[0]
-    low_dist:
-        Lowest value allowable as a distance for two elements
-        to be considered neighbors
-    high_dist:
-        Highest value allowable as a distance for two elements
-        to be considered neighbors
-
-    Examples
-    --------
-    >>> x = np.array([1.,2.,3.,4.,5.,15.,25.])
-    >>> y = np.array([1.1, 2.3, 3.1, 4., 25., 25.1])
-    >>> dist_fun = lambda x,y: y - x
-    >>> low_dist = -0.11
-    >>> high_dist = 0.11
-    >>> find_neighbors_vectorized(x,y,dist_fun,low_dist, high_dist)
-    IndexBipartite(left_neighbors={0: [0], 2: [2], 3: [3], 6: [4, 5]},
-      right_neighbors={0: [0], 2: [2], 3: [3], 4: [6], 5: [6]})
-    >>> low_dist = -1.11
-    >>> high_dist = -0.98
-    >>> out = find_neighbors_vectorized(x,y,dist_fun,low_dist, high_dist)
-    >>> out
-    IndexBipartite(left_neighbors={4: [3]}, right_neighbors={3: [4]})
-    >>> [[f"{x[k]} matches {y[w]}" for w in v] for k, v in out.left_neighbors.items()]
-    [['5.0 matches 4.0']]
-    """
-    assert low_dist < high_dist
-    neighbors = IndexBipartite()
-
-    diffs = _apply_vectorized(x, y, dist_fun)
-    in_range = (diffs > low_dist) & (diffs < high_dist)
-    inds = np.where(in_range)
-    neighbors = IndexBipartite.from_arrays(*inds)
-    return neighbors
-
-
-def _apply_vectorized(x: NDArray, y: NDArray, fun: callable) -> NDArray:
-    """Applies a function to all combinations of elements in x and y.
-
-    Arguments:
-    ---------
-    x, y: NDArray
-        One dimensional Arrays to apply the function to
-    fun: callable
-        Function to apply to all combinations of elements in x and y
-
-    Returns
-    -------
-    NDArray
-        Array of shape (len(x), len(y)) with the results of the function
-        applied to all combinations of elements in x and y
-
-    Examples
-    --------
-    >>> x = np.array([1.,5.,15.,25.])
-    >>> y = np.array([1.1, 25.1])
-    >>> fun = lambda x,y: y - x
-    >>> _apply_vectorized(x,y,fun)
-    array([[ 0.1, 24.1],
-        [ -3.9, 20.1],
-        [-13.9, 10.1],
-        [-23.9,  0.1]])
-    """
-    outs = fun(np.tile(np.expand_dims(x, axis=-1), len(y)), y)
-    return outs
 
 
 # @profile
