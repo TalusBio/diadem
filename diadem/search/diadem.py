@@ -165,7 +165,8 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                 precursor_mz=group.precursor_range,
                 spec_int=scoring_intensities,
                 spec_mz=new_stack.mzs,
-                top_n=100,
+                top_n=1,
+                # top_n=100, use 100 when you add precursor information
             )
 
             # TODO: implement here a
@@ -203,6 +204,8 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             else:
                 num_targets += 1
 
+            scores = scores.sort_values(by="Score", ascending=False).iloc[:1]
+            del scores["rank"]
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
 
