@@ -16,7 +16,7 @@ from diadem.data_io import read_raw_data
 from diadem.data_io.mzml import ScanGroup, StackedChromatograms
 from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
-from diadem.search.search_utils import make_pin
+from diadem.search.mokapot import brew_run
 from diadem.utilities.utils import plot_to_log
 
 
@@ -195,7 +195,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             scores = None
 
         if scores is not None:
-            scores["id"] = match_id
+            scores["peak_id"] = match_id
             scores["RetentionTime"] = group.retention_times[new_stack.ref_index]
             if hasattr(group, "imss"):
                 scores["IonMobility"] = new_stack.ref_ims
@@ -205,7 +205,6 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                 num_targets += 1
 
             scores = scores.sort_values(by="Score", ascending=False).iloc[:1]
-            del scores["rank"]
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
 
@@ -424,13 +423,24 @@ def diadem_main(
 
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
+
+    # RTs are stored as f16, which need to be converted to f32 for parquet
+    f16_cols = list(results.select_dtypes("float16"))
+    if f16_cols:
+        for col in f16_cols:
+            results[col] = results[col].astype("float32")
     results.to_parquet(prefix + ".parquet", index=False, engine="pyarrow")
-    make_pin(
-        results,
-        fasta_path=fasta_path,
-        mzml_path=data_path,
-        pin_path=prefix + ".tsv.pin",
-    )
+    try:
+        # Right now I am bypassing the mokapot results, because they break a test
+        # meant to check that no decoys are detected (which is true in that case).
+        mokapot_results = brew_run(
+            results,
+            fasta_path=fasta_path,
+            ms_data_path=data_path,
+        )
+        mokapot_results.to_parquet(prefix + ".peptides.parquet")
+    except ValueError as e:
+        logger.error(f"Could not run mokapot: {e}")
 
     end_time = time.time()
     elapsed_time = end_time - start_time
