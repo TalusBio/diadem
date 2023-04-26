@@ -25,7 +25,7 @@ class MatrixFactorizationModel(nn.Module):
         The number of runs.
     n_factors: int
         The number of latent factors.
-    rng : int | numpy.random.Generator
+    rng : int | numpy.random.Generator | None
         The random number generator.
     """
 
@@ -34,7 +34,7 @@ class MatrixFactorizationModel(nn.Module):
         n_peptides: int,
         n_runs: int,
         n_factors: int,
-        rng: int | np.random.Generator,
+        rng: int | np.random.Generator | None = None,
     ) -> None:
         """Initialize an ImputerModel."""
         super().__init__()

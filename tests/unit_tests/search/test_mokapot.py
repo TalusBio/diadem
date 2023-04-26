@@ -32,7 +32,7 @@ def test_prepare_df(kid_fasta):
             "list_col": [[1, 2]] * 5,
             "cool_npeaks": [5, 5, 6, 6, 4],
             "decoy": [False, False, False, True, False],
-        }
+        },
     )
 
     expected = pd.DataFrame(
