@@ -1,8 +1,8 @@
 """Run-level mokapot analyses."""
 import re
+from collections.abc import Iterable
 from os import PathLike
 from pathlib import Path
-from typing import Iterable
 
 import mokapot
 import pandas as pd
@@ -31,7 +31,7 @@ def brew_run(
     pd.DataFrame
         The run-level peptide scores and confidence estimates.
     """
-    input_df = (_prepare_df(results, fasta_path, ms_data_path),)
+    input_df = _prepare_df(results, fasta_path, ms_data_path)
     nonfeat = [
         "peptide",
         "proteins",
@@ -85,7 +85,8 @@ def _prepare_df(
     results["filename"] = Path(ms_data_path).stem
     results["target_pair"] = results["peptide"]
     results.loc[results["decoy"], "target_pair"] = results.loc[
-        results["decoy"], "peptide"
+        results["decoy"],
+        "peptide",
     ].apply(_decoy_to_target)
     results["decoy"] = ~results["decoy"]
     stripped_peptides = results["target_pair"].str.replace("\\[.*?\\]", "", regex=True)

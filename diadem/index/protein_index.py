@@ -62,7 +62,9 @@ class ProteinNGram:
 
     @staticmethod
     def from_fasta(
-        fasta_file: PathLike | str, ngram_size: int = 4, progress: bool = True
+        fasta_file: PathLike | str,
+        ngram_size: int = 4,
+        progress: bool = True,
     ) -> ProteinNGram:
         """Builds a protein n-gram from a fasta file.
 

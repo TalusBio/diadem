@@ -12,7 +12,9 @@ def fake_database(fake_5k_fasta, request):
     Right not it is parametrized so it uses multiple chunk sizes.
     """
     db = db_from_fasta(
-        fake_5k_fasta, chunksize=request.param, config=DiademConfig(run_parallelism=1)
+        fake_5k_fasta,
+        chunksize=request.param,
+        config=DiademConfig(run_parallelism=1),
     )
     return db
 
@@ -29,7 +31,7 @@ def fake_prefiltered_database(fake_database: IndexedDb, request):
 
 def score_all_specs_open(db: IndexedDb, specs):
     """Helper function that scores all the spectra passed as tuples with a database."""
-    for mzs, ints, prec_mz in tqdm(specs):
+    for mzs, ints, _prec_mz in tqdm(specs):
         db.hyperscore(precursor_mz=(700.0, 720.0), spec_int=ints, spec_mz=mzs)
 
 
@@ -42,7 +44,9 @@ def test_db_scoring_speed_unfiltered(fake_database, fake_spectra_tuples_100, ben
 
 
 def test_db_scoring_speed_filtered(
-    fake_prefiltered_database, fake_spectra_tuples_100, benchmark
+    fake_prefiltered_database,
+    fake_spectra_tuples_100,
+    benchmark,
 ):
     """Benchmarks how long it takes to search 100 spectra.
 
@@ -55,7 +59,9 @@ def score_all_specs_closed(db: IndexedDb, specs):
     """Runs a closed search on all spectra passed."""
     for mzs, ints, prec_mz in tqdm(specs):
         db.hyperscore(
-            precursor_mz=(prec_mz - 0.01, prec_mz + 0.01), spec_int=ints, spec_mz=mzs
+            precursor_mz=(prec_mz - 0.01, prec_mz + 0.01),
+            spec_int=ints,
+            spec_mz=mzs,
         )
 
 

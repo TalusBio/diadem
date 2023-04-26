@@ -10,7 +10,7 @@ authors = [
     {name = "William E. Fondrie", email = "wfrondie@talus.bio"},
 ]
 description = "A modular, feature-centric toolkit for DIA proteomics"
-requires-python = ">=3.9,<=3.12"
+requires-python = ">=3.9,<3.11"
 keywords = ["proteomics", "dia", "mass spec"]
 license = {text = "Apache 2.0"}
 classifiers = [
@@ -20,10 +20,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "pandas >= 1.5.2",
-    "numpy >= 1.23.5",
-    # "ms2ml >= 0.0.33",
-    "ms2ml >= 0.0.31",
+    "pandas >= 2.0.0",
+    "numpy == 1.23.5", # Pinned because of numba
+    "ms2ml >= 0.0.35",
     "tqdm >= 4.64.1",
     "loguru >= 0.6.0",
     "rich-click >= 1.6.0",
@@ -31,13 +30,16 @@ dependencies = [
     "pyarrow >= 10.0.1",
     "platformdirs >= 2.6.0",
     "joblib >= 1.2.0",
-    # Deisotoping
-    "brain-isotopic-distribution >= 1.5.11",
-    "ms-peak-picker >= 0.1.40",
-    "ms-deisotope >= 0.0.46",
     "mokapot >= 0.9.1",
+    "alphatims >= 1.0.6",
+    "hdf5plugin",
+    "polars >= 0.16.9",
+    "torch >= 2.0.0",
 ]
 dynamic = ["version"]
+
+[project.scripts]
+diadem = "diadem.cli:main_cli"
 
 [project.readme]
 file = "README.md"
@@ -56,6 +58,15 @@ test = [
 profiling = [
     "line_profiler",
 ]
+plot = [
+    "matplotlib"
+]
+dev = [
+    "ruff >= 0.0.253",
+   "black >= 23.1.0",
+    "isort >=  5.12.0",
+    "pylance >= 0.3.9",
+]
 
 
 [tool.setuptools.packages.find]
@@ -64,6 +75,7 @@ include = ["diadem"]
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "--doctest-modules -v"
+doctest_optionflags = "NORMALIZE_WHITESPACE"
 testpaths = [
     "diadem",
     "tests",
@@ -71,7 +83,8 @@ testpaths = [
 
 [tool.ruff]
 line-length = 88
-select = ["E", "F", "W", "C", "I", "D", "UP", "N", "ANN", "T20"]
+select = ["E", "F", "B","W", "C", "I", "D", "UP", "N", "ANN", "T20", "COM"]
+target-version = "py39"
 
 # ANN101 Missing type annotation for `self` in method
 # D213 Multi-line docstring summary should start at the second lin

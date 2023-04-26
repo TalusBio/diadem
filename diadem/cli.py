@@ -38,16 +38,18 @@ def main_cli() -> None:
 
 @main_cli.command(help="Runs the search module of DIAdem")
 @click.option(
-    "--mzml_file",
-    help="mzML file to use as an input for the search",
+    "--data_path",
+    help="mzML or .d file to use as an input for the search",
 )
 @click.option("--fasta", help="fasta file to use as an input")
 @click.option("--out_prefix", help="Prefix to add to all output files")
 @click.option(
-    "--mode", type=click.Choice(["dda", "dia"], case_sensitive=False), default="dia"
+    "--mode",
+    type=click.Choice(["dda", "dia"], case_sensitive=False),
+    default="dia",
 )
 @click.option("--config", help="Path to the config toml configuration file to use.")
-def search(mzml_file, fasta, out_prefix, mode, config) -> None:
+def search(data_path, fasta, out_prefix, mode, config) -> None:
     setup_logger()
     if config:
         config = DiademConfig.from_toml(config)
@@ -56,11 +58,17 @@ def search(mzml_file, fasta, out_prefix, mode, config) -> None:
         config = DiademConfig()
     if mode == "dia":
         diadem_main(
-            fasta_path=fasta, mzml_path=mzml_file, config=config, out_prefix=out_prefix
+            fasta_path=fasta,
+            data_path=data_path,
+            config=config,
+            out_prefix=out_prefix,
         )
     elif mode == "dda":
         dda_main(
-            mzml_path=mzml_file, fasta_path=fasta, config=config, out_prefix=out_prefix
+            mzml_path=data_path,
+            fasta_path=fasta,
+            config=config,
+            out_prefix=out_prefix,
         )
     else:
         raise NotImplementedError

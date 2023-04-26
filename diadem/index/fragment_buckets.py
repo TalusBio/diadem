@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
 from tqdm.auto import tqdm
 
-from diadem.utils import get_slice_inds, is_sorted
+from diadem.utilities.utils import get_slice_inds, is_sorted
 
 SortingLevel = Literal["ms1", "ms2"]
 
@@ -152,12 +153,14 @@ class FragmentBucket:
         assert (
             len(sorting_level) == 1
         ), "Cannot concatenate buckets with different sorting levels"
+        if len(args) == 1:
+            return args[0]
         return cls(
             fragment_mzs=np.concatenate([x.fragment_mzs for x in args]),
             fragment_series=np.concatenate([x.fragment_series for x in args]),
             precursor_ids=np.concatenate([x.precursor_ids for x in args]),
             precursor_mzs=np.concatenate([x.precursor_mzs for x in args]),
-            is_sorted=True,
+            is_sorted=False,
             sorting_level=sorting_level.pop(),
         )
 
@@ -234,8 +237,10 @@ class FragmentBucketList:
             return self.buckets[val]
         else:
             raise ValueError(
-                f"Subsetting FragmentBucketList with {type(val)}: {val} is not"
-                " supported"
+                (
+                    f"Subsetting FragmentBucketList with {type(val)}: {val} is not"
+                    " supported"
+                ),
             )
 
     @classmethod
@@ -283,7 +288,7 @@ class FragmentBucketList:
                     precursor_mzs=precursor_mzs[i : i + chunksize],
                     sorting_level=sorting_level,
                     is_sorted=been_sorted,
-                )
+                ),
             )
         return cls(buckets)
 
@@ -294,7 +299,9 @@ class FragmentBucketList:
 
     # @profile
     def yield_candidates(
-        self, ms2_range: tuple[float, float], ms1_range: tuple[float, float]
+        self,
+        ms2_range: tuple[float, float],
+        ms1_range: tuple[float, float],
     ) -> None | Iterator[tuple[int, float, str]]:
         """Yields fragments that match the passed masses.
 
@@ -326,7 +333,9 @@ class FragmentBucketList:
                 continue
 
             yield from zip(
-                bucket.precursor_ids, bucket.fragment_mzs, bucket.fragment_series
+                bucket.precursor_ids,
+                bucket.fragment_mzs,
+                bucket.fragment_series,
             )
 
 
@@ -365,7 +374,9 @@ class PrefilteredMS1BucketList:
             for k, v in unpacked.items():
                 self.buckets[k].append(v)
 
-        iterator = enumerate(tqdm(self.buckets, disable=not progress))
+        iterator = enumerate(
+            tqdm(self.buckets, disable=not progress, desc="Concatenating buckets"),
+        )
 
         # This gets progressively updated with the minimum bucket size.
         min_ms2_mz = 2**15
@@ -383,6 +394,7 @@ class PrefilteredMS1BucketList:
 
         self.min_ms2_mz = min_ms2_mz
 
+    # @profile
     def unpack_bucket(self, bucket: FragmentBucket) -> dict[int, FragmentBucket]:
         """Unpacks a bucket into a dictionary of buckets.
 
@@ -392,11 +404,18 @@ class PrefilteredMS1BucketList:
         """
         # TODO decide if this should be a fragment bucket method...
         integerized = (bucket.fragment_mzs * self.prod_num).astype(int)
+        sorted_lookup = len(integerized > 1000) and is_sorted(integerized)
         uniqs = np.unique(integerized)
         out = {}
 
         for u in uniqs:
-            idxs = integerized == u
+            if sorted_lookup:
+                idxs = slice(
+                    np.searchsorted(integerized, u, "left"),
+                    np.searchsorted(integerized, u, "right"),
+                )
+            else:
+                idxs = integerized == u
 
             # TODO consider here not traking precursor mzs anymore
             out[u] = FragmentBucket(
@@ -408,7 +427,9 @@ class PrefilteredMS1BucketList:
         return out
 
     def yield_buckets_matching_ms2(
-        self, min_mz: float, max_mz: float
+        self,
+        min_mz: float,
+        max_mz: float,
     ) -> Iterator[FragmentBucket]:
         """Yields buckets that match the passed ms2 range."""
         min_index = max(0, int(min_mz * self.prod_num) - 1)
@@ -420,7 +441,9 @@ class PrefilteredMS1BucketList:
 
     # @profile
     def yield_candidates(
-        self, ms2_range: tuple[float, float], ms1_range: tuple[float, float]
+        self,
+        ms2_range: tuple[float, float],
+        ms1_range: tuple[float, float],
     ) -> Iterator[tuple[int, float, str]]:
         """Yields fragments that match the passed masses.
 
@@ -446,10 +469,12 @@ class PrefilteredMS1BucketList:
         min_mz, max_mz = ms2_range
         last_mz = 0
         for x in self.yield_buckets_matching_ms2(min_mz, max_mz):
+            assert is_sorted(x.fragment_mzs)
+            last_val = np.searchsorted(x.fragment_mzs, max_mz, "right")
             for precursor_id, fragmz, fragseries in zip(
-                x.precursor_ids, x.fragment_mzs, x.fragment_series
+                x.precursor_ids[:last_val],
+                x.fragment_mzs[:last_val],
+                x.fragment_series[:last_val],
             ):
-                if fragmz > max_mz:
-                    break
                 assert last_mz <= (last_mz := fragmz), "Fragment mzs not sorted"
                 yield precursor_id, fragmz, fragseries
