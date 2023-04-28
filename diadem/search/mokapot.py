@@ -50,7 +50,7 @@ def brew_run(
         filename_column="filename",
         copy_data=False,
     )
-    results = mokapot.brew(peptides)
+    results, _models = mokapot.brew(peptides)
     return results.peptides
 
 

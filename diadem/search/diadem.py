@@ -196,7 +196,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
 
         if scores is not None:
             scores["peak_id"] = match_id
-            scores["RetentionTime"] = group.retention_times[new_stack.ref_index]
+            scores["RetentionTime"] = group.retention_times[new_stack.parent_index]
             if hasattr(group, "imss"):
                 scores["IonMobility"] = new_stack.ref_ims
             if scores["decoy"].iloc[0]:
@@ -384,6 +384,7 @@ def diadem_main(
         for group in ss.yield_iso_window_groups(progress=True):
             group_db = db.index_prefiltered_from_parquet(cache, *group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
+            group_results.to_parquet("latestresults.parquet")
             results.append(group_results)
     else:
 
@@ -440,8 +441,16 @@ def diadem_main(
         )
         mokapot_results.to_parquet(prefix + ".peptides.parquet")
     except ValueError as e:
-        logger.error(f"Could not run mokapot: {e}")
-
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    logger.info(f"Elapsed time: {elapsed_time}")
+        if "decoy PSMs were detected" in str(e):
+            logger.warning(f"Could not run mokapot: {e}")
+        else:
+            logger.error(f"Could not run mokapot: {e}")
+            raise e
+    except RuntimeError as e:
+        logger.warning(f"Could not run mokapot: {e}")
+        logger.error(results)
+        raise e
+    finally:
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Elapsed time: {elapsed_time}")

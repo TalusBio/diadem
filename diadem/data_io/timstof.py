@@ -9,7 +9,7 @@ from os import PathLike
 from typing import Literal
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from alphatims.bruker import TimsTOF
 from joblib import Parallel, delayed
 from loguru import logger
@@ -294,7 +294,7 @@ class TimsScanGroup(ScanGroup):
         if len(self.imss) != len(self.mzs):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
-    def as_dataframe(self) -> pd.DataFrame:
+    def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -416,6 +416,7 @@ class TimsSpectrumStacker(SpectrumStacker):
         yield _datafile
         del _datafile
 
+    # @profile
     def _precursor_iso_window_groups(
         self,
         precursor_index: int,
@@ -452,12 +453,13 @@ class TimsSpectrumStacker(SpectrumStacker):
             out[k] = TimsScanGroup(
                 precursor_mzs=precursor_mzs,
                 precursor_intensities=precursor_intensities,
-                precursor_rts=precursor_rts,
+                precursor_retention_times=precursor_rts,
                 precursor_imss=precursor_imss,
                 **v,
             )
         return out
 
+    # @profile
     def _precursor_iso_window_elements(
         self,
         precursor_index: int,
@@ -726,7 +728,7 @@ def _get_precursor_index_windows(
         # Since we want groups of peaks that share rt-quad values, regardless
         # of the IMS value.
 
-        df_peak_data = pd.DataFrame(contig_peak_data)
+        df_peak_data = pl.DataFrame(contig_peak_data)
         grouping_vals = [
             "quad_low_mz_values",
             "quad_high_mz_values",
@@ -736,23 +738,40 @@ def _get_precursor_index_windows(
         peak_data_vals = ["mz_values", "corrected_intensity_values", "mobility_values"]
 
         g_inds, g_vals = get_break_indices(
-            df_peak_data["quad_indices"].array,
+            df_peak_data["quad_indices"].to_numpy(zero_copy_only=True),
             min_diff=0,
         )
 
         for si, ei in zip(g_inds[:-1], g_inds[1:]):
-            curr_peak_data = df_peak_data.iloc[si:ei]
+            curr_peak_data = df_peak_data[si:ei, :]
+
+            # Sanity check to make sure all peaks in the selected chunk share
+            # the same retention times and quad isolation windows
             assert all(
                 np.abs(np.max(curr_peak_data[x]) - np.min(curr_peak_data[x])) < 1e-3
                 for x in grouping_vals
             )
-            current_chunk_data = {k: curr_peak_data[k].values[0] for k in grouping_vals}
+            current_chunk_data = {k: curr_peak_data[k][0] for k in grouping_vals}
+            quad_name = (
+                f"{current_chunk_data['quad_low_mz_values']:.6f},"
+                f" {current_chunk_data['quad_high_mz_values']:.6f}"
+            )
+            if (
+                "DEBUG_DIADEM" in os.environ
+                and quad_splits
+                and quad_name not in quad_splits
+            ):
+                # This makes it so that when enabling the debug diadem
+                # mode will only use one quad iso window instead of all
+                # quad iso windows that share the same precursor incex.
+                continue
 
             current_chunk_data["scan_indices"] = current_chunk_data["quad_indices"]
 
-            peak_data = dict(
-                zip(peak_data_vals, curr_peak_data[peak_data_vals].T.values),
-            )
+            peak_data = {
+                k: v.to_numpy(zero_copy_only=True)
+                for k, v in curr_peak_data[peak_data_vals].to_dict().items()
+            }
 
             start_len = len(peak_data["mz_values"])
 
@@ -783,10 +802,6 @@ def _get_precursor_index_windows(
                 f_min = int(np.min(d_out["intensity"]))
                 f_max = int(np.max(d_out["intensity"]))
                 current_chunk_data.update(d_out)
-                quad_name = (
-                    f"{current_chunk_data['quad_low_mz_values']:.6f},"
-                    f" {current_chunk_data['quad_high_mz_values']:.6f}"
-                )
                 quad_splits.setdefault(quad_name, []).append(current_chunk_data)
 
             postfix_dict = {

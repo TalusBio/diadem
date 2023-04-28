@@ -7,13 +7,12 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml import Spectrum
 from ms2ml.data.adapters import MZMLAdapter
 from numpy.typing import NDArray
-from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig, MassError
@@ -42,7 +41,7 @@ class ScanGroup:
 
     precursor_mzs: list[NDArray]
     precursor_intensities: list[NDArray]
-    precursor_rts: NDArray
+    precursor_retention_times: NDArray
 
     def __post_init__(self) -> None:
         """Check that all the arrays have the same length."""
@@ -72,7 +71,48 @@ class ScanGroup:
             title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
         )
 
-    def as_dataframe(self) -> pd.DataFrame:
+    def to_cache(self, dir: Path) -> None:
+        """Saves the group to a cache file."""
+        Path(dir).mkdir(parents=True, exist_ok=True)
+        fragment_df = self.as_dataframe()
+        precursor_df = self.precursor_dataframe()
+
+        stem = Path(self.iso_window_name)
+        precursor_df.write_parquet(dir / f"{stem}_precursors.parquet")
+        fragment_df.write_parquet(dir / f"{stem}_fragments.parquet")
+
+    @classmethod
+    def from_cache(cls, dir: Path, name: str) -> ScanGroup:
+        """Loads a group from a cache file."""
+        fragment_data = pl.read_parquet(dir / f"{name}_fragments.parquet").to_dict()
+        precursor_range = (
+            fragment_data.pop("precursor_start")[0],
+            fragment_data.pop("precursor_end")[0],
+        )
+        ind_max_int = [np.argmax(x) for x in fragment_data["intensities"]]
+        base_peak_mz = np.array(
+            [x[i] for x, i in zip(fragment_data["mzs"], ind_max_int)],
+        )
+        base_peak_int = np.array(
+            [x[i] for x, i in zip(fragment_data["intensities"], ind_max_int)],
+        )
+
+        precursor_data = pl.read_parquet(dir / f"{name}_fragments.parquet").to_dict()
+        return cls(
+            precursor_range=precursor_range,
+            mzs=fragment_data["mzs"],
+            intensities=fragment_data["intensities"],
+            base_peak_mz=base_peak_mz,
+            base_peak_int=base_peak_int,
+            retention_times=fragment_data["retention_times"],
+            scan_ids=fragment_data["scan_ids"],
+            iso_window_name=name,
+            precursor_mzs=precursor_data["precursor_mzs"],
+            precursor_intensities=precursor_data["precursor_intensities"],
+            precursor_retention_times=precursor_data["precursor_retention_times"],
+        )
+
+    def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -82,15 +122,35 @@ class ScanGroup:
         - precursor_start: start of the precursor range
         - precursor_end: end of the precursor range
         """
-        out = pd.DataFrame(
+        out = pl.DataFrame(
             {
                 "mzs": self.mzs,
                 "intensities": self.intensities,
-                "rts": self.retention_times,
+                "retention_times": self.retention_times,
+                "scan_ids": self.scan_ids,
             },
         )
         out["precursor_start"] = min(self.precursor_range)
         out["precursor_end"] = max(self.precursor_range)
+        return out
+
+    def precursor_dataframe(self) -> pl.DataFrame:
+        """Returns a dataframe with the metadata for the group.
+
+        The dataframe has the following columns:
+        - precursor_mzs: list of precursor mzs for each spectrum
+        - precursor_intensities: list of precursor intensities for each spectrum
+        - precursor_retention_times: precursor retention times for each spectrum
+        - precursor_start: start of the precursor range
+        - precursor_end: end of the precursor range
+        """
+        out = pl.DataFrame(
+            {
+                "precursor_mzs": self.precursor_mzs,
+                "precursor_intensities": self.precursor_intensities,
+                "precursor_retention_times": self.precursor_retention_times,
+            },
+        )
         return out
 
     def get_highest_window(
@@ -232,7 +292,7 @@ class ScanGroup:
             each of which is the for the values integrated for the
             intensity values.
         """
-        index = np.searchsorted(self.precursor_rts, rt)
+        index = np.searchsorted(self.precursor_retention_times, rt)
         slc, center_index = slice_from_center(
             index,
             window=11,
@@ -517,23 +577,29 @@ class SpectrumStacker:
 
         # TODO check if directly reading the xml is faster ...
         # also evaluate if that is needed
-        scaninfo = self.adapter.get_scan_info()
-        ms1_scaninfo = scaninfo[scaninfo.ms_level <= 1]
+        scaninfo = pl.DataFrame(self.adapter.get_scan_info()).fill_null(0.0)
+        ms1_scaninfo = scaninfo.filter(pl.col("ms_level") <= 1)
+
         self.config = config
         if "DEBUG_DIADEM" in os.environ:
             logger.error("RUNNING DIADEM IN DEBUG MODE (only 700-710 mz iso windows)")
-            scaninfo = scaninfo[scaninfo.ms_level > 1]
-            scaninfo = scaninfo[
-                [x[0] > 700 and x[0] < 705 for x in scaninfo.iso_window]
-            ]
+            scaninfo = scaninfo.filter(pl.col("ms_level") > 1)
+            window_filter = [x[0] > 700 and x[0] < 705 for x in scaninfo["iso_window"]]
+            scaninfo = scaninfo.filter(window_filter)
+
+        ms1_scaninfo = ms1_scaninfo.drop("collision_energy").with_columns(
+            iso_window=0.0,
+        )
         self.ms1info = ms1_scaninfo
-        self.ms2info = scaninfo[scaninfo.ms_level > 1].copy().reset_index()
-        self.unique_iso_windows = set(np.array(self.ms2info.iso_window))
+        self.ms2info = scaninfo.filter(pl.col("ms_level") > 1)
+        self.unique_iso_windows = {
+            tuple(x) for x in self.ms2info["iso_window"].to_numpy()
+        }
 
     def _preprocess_scangroup(
         self,
         name: str,
-        df_chunk: DataFrame,
+        df_chunk: pl.DataFrame,
         mz_range: None | tuple[float, float] = None,
         progress: bool = True,
     ) -> tuple[NDArray, ...]:
@@ -550,11 +616,11 @@ class SpectrumStacker:
         npeaks_deisotope = []
 
         for row in tqdm(
-            df_chunk.itertuples(),
+            df_chunk.rows(named=True),
             desc=f"Preprocessing spectra for {name}",
             disable=not progress,
         ):
-            spec_id = row.spec_id
+            spec_id = row["spec_id"]
             curr_spec: Spectrum = self.adapter[spec_id]
             # NOTE instrument seems to have a wrong value ...
             # Also activation seems to not be recorded ...
@@ -609,7 +675,7 @@ class SpectrumStacker:
 
         window_bp_mz = np.array(window_bp_mz).astype(np.float32)
         window_bp_int = np.array(window_bp_int).astype(np.float32)
-        window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
+        window_rtinsecs = np.array(window_rtinsecs).astype(np.float32)
         check_sorted(window_rtinsecs)
         window_scanids = np.array(window_scanids, dtype="object")
 
@@ -638,8 +704,8 @@ class SpectrumStacker:
         self,
         iso_window_name: str,
         iso_window: tuple[float, float],
-        ms2_chunk: DataFrame,
-        ms1_chunk: DataFrame,
+        ms2_chunk: pl.DataFrame,
+        ms1_chunk: pl.DataFrame,
     ) -> ScanGroup:
         """Gets all spectra that share the same window.
 
@@ -696,7 +762,7 @@ class SpectrumStacker:
             scan_ids=window_scanids,
             precursor_intensities=prec_ints,
             precursor_mzs=prec_mzs,
-            precursor_rts=prec_rtinsecs,
+            precursor_retention_times=prec_rtinsecs,
         )
         return group
 
@@ -705,7 +771,7 @@ class SpectrumStacker:
         workerpool: None | Parallel = None,
     ) -> list[ScanGroup]:
         """Returns a list of all ScanGroups in an mzML file."""
-        grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
+        grouped = self.ms2info.sort("RTinSeconds").groupby("iso_window")
         iso_windows, chunks = zip(*list(grouped))
         precursor_info = self.ms1info
 
@@ -738,7 +804,7 @@ class SpectrumStacker:
 
     def yield_iso_window_groups(self, progress: bool = False) -> Iterator[ScanGroup]:
         """Yield scan groups for each unique isolation window."""
-        grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
+        grouped = self.ms2info.sort("RTinSeconds").groupby("iso_window")
         precursor_info = self.ms1info
 
         for iso_window, chunk in tqdm(

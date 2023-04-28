@@ -830,7 +830,9 @@ class IndexedDb:
             return None
 
         scores["Score"] = (
-            scores["log_factorial_peak_sum"] + scores["log_intensity_sums"]
+            scores["log_factorial_peak_sum"]
+            + scores["log_intensity_sums"]
+            # scores["log_intensity_sums"]
         )
         # Calculate requirements for the z score among all other proposed scores!
         score_mean = scores["Score"].mean()
