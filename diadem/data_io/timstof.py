@@ -294,6 +294,22 @@ class TimsScanGroup(ScanGroup):
         if len(self.imss) != len(self.mzs):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
+    @classmethod
+    def _elems_from_fragment_cache(cls, file):
+        elems, data = super()._elems_from_fragment_cache(file)
+        elems["imss"] = data["imss"]
+        return elems, data
+
+    @classmethod
+    def _precursor_elems_from_cache(cls, file):
+        elems, data = super()._precursor_elems_from_cache(file)
+        elems["imss"] = data["imss"]
+        return elems, data
+
+    def to_cache(self, Path):
+        """Saves the group to a cache file."""
+        super().to_cache(Path)
+
     def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
 
@@ -308,6 +324,13 @@ class TimsScanGroup(ScanGroup):
         out = super().as_dataframe()
         out["ims"] = self.imss
         return out
+
+    def precursor_dataframe(self) -> pl.DataFrame:
+        df = super().precursor_dataframe()
+        df = df.with_columns(
+            pl.Series(name="precursor_imss", values=self.precursor_imss),
+        )
+        return df
 
     def get_highest_window(
         self,

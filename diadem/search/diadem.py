@@ -384,7 +384,8 @@ def diadem_main(
         for group in ss.yield_iso_window_groups(progress=True):
             group_db = db.index_prefiltered_from_parquet(cache, *group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
-            group_results.to_parquet("latestresults.parquet")
+            if group_results is not None:
+                group_results.to_parquet("latestresults.parquet")
             results.append(group_results)
     else:
 

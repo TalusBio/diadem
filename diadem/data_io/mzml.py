@@ -71,20 +71,25 @@ class ScanGroup:
             title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
         )
 
+    @property
+    def cache_file_stem(self) -> str:
+        stem = "".join(x if x.isalnum() else "_" for x in self.iso_window_name)
+        return stem
+
     def to_cache(self, dir: Path) -> None:
         """Saves the group to a cache file."""
         Path(dir).mkdir(parents=True, exist_ok=True)
         fragment_df = self.as_dataframe()
         precursor_df = self.precursor_dataframe()
 
-        stem = Path(self.iso_window_name)
+        stem = self.cache_file_stem
+
         precursor_df.write_parquet(dir / f"{stem}_precursors.parquet")
         fragment_df.write_parquet(dir / f"{stem}_fragments.parquet")
 
     @classmethod
-    def from_cache(cls, dir: Path, name: str) -> ScanGroup:
-        """Loads a group from a cache file."""
-        fragment_data = pl.read_parquet(dir / f"{name}_fragments.parquet").to_dict()
+    def _elems_from_fragment_cache(cls, file):
+        fragment_data = pl.read_parquet(file).to_dict()
         precursor_range = (
             fragment_data.pop("precursor_start")[0],
             fragment_data.pop("precursor_end")[0],
@@ -97,19 +102,40 @@ class ScanGroup:
             [x[i] for x, i in zip(fragment_data["intensities"], ind_max_int)],
         )
 
-        precursor_data = pl.read_parquet(dir / f"{name}_fragments.parquet").to_dict()
+        out = {
+            "precursor_range": precursor_range,
+            "mzs": fragment_data["mzs"],
+            "intensities": fragment_data["intensities"],
+            "base_peak_mz": base_peak_mz,
+            "base_peak_int": base_peak_int,
+            "retention_times": fragment_data["retention_times"],
+            "scan_ids": fragment_data["scan_ids"],
+        }
+
+        return out, fragment_data
+
+    def _precursor_elems_from_cache(self, file):
+        precursor_data = pl.read_parquet(file).to_dict()
+        out = {
+            "precursor_mzs": precursor_data["precursor_mzs"],
+            "precursor_intensities": precursor_data["precursor_intensities"],
+            "precursor_retention_times": precursor_data["precursor_retention_times"],
+        }
+        return out, precursor_data
+
+    @classmethod
+    def from_cache(cls, dir: Path, name: str) -> ScanGroup:
+        """Loads a group from a cache file."""
+        fragment_elems, _fragment_data = cls._elems_from_fragment_cache(
+            dir / f"{name}_fragments.parquet",
+        )
+        precursor_elems, _fragment_data = cls._precursor_elems_from_cache(
+            dir / f"{name}_precursors.parquet",
+        )
         return cls(
-            precursor_range=precursor_range,
-            mzs=fragment_data["mzs"],
-            intensities=fragment_data["intensities"],
-            base_peak_mz=base_peak_mz,
-            base_peak_int=base_peak_int,
-            retention_times=fragment_data["retention_times"],
-            scan_ids=fragment_data["scan_ids"],
             iso_window_name=name,
-            precursor_mzs=precursor_data["precursor_mzs"],
-            precursor_intensities=precursor_data["precursor_intensities"],
-            precursor_retention_times=precursor_data["precursor_retention_times"],
+            **precursor_elems,
+            **fragment_elems,
         )
 
     def as_dataframe(self) -> pl.DataFrame:
