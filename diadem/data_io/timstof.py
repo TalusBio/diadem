@@ -771,7 +771,8 @@ def _get_precursor_index_windows(
             # Sanity check to make sure all peaks in the selected chunk share
             # the same retention times and quad isolation windows
             assert all(
-                np.abs(np.max(curr_peak_data[x]) - np.min(curr_peak_data[x])) < 1e-3
+                np.abs(curr_peak_data[x].abs().max() - curr_peak_data[x].abs().max())
+                < 1e-3
                 for x in grouping_vals
             )
             current_chunk_data = {k: curr_peak_data[k][0] for k in grouping_vals}
@@ -855,7 +856,7 @@ def _preprocess_ims(
     # TODO make all of these arguments
     # or make this callable class.
     PRELIM_N_PEAK_FILTER = 5_000  # noqa
-    FINAL_N_PEAK_FILTER = 1000  # noqa
+    FINAL_N_PEAK_FILTER = 1500  # noqa
     MIN_INTENSITY_KEEP = 500  # noqa
     MIN_NUM_SEEDS = 5_000  # noqa
     IMS_TOL = 0.01  # noqa
@@ -948,30 +949,29 @@ def _preprocess_ims(
             & (ims > plot_ims_range[0])
             & (ims < plot_ims_range[1])
         )
-        plot_ims_values = ims[top_plot_filter]
-        plot_mz_values = mz[top_plot_filter]
-        plot_intensity_values = intensity[top_plot_filter]
+        if len(top_plot_filter) > 0:
+            plot_ims_values = ims[top_plot_filter]
+            plot_mz_values = mz[top_plot_filter]
+            plot_intensity_values = intensity[top_plot_filter]
 
-        plt.clf()
-        plt.scatter(
-            o_plot_mz_values,
-            o_plot_ims_values,
-            c="gray",
-            s=np.sqrt(o_plot_intensity_values),
-        )
-        plt.scatter(
-            plot_mz_values,
-            plot_ims_values,
-            c=plot_intensity_values,
-            cmap="viridis",
-            s=np.sqrt(plot_intensity_values),
-            alpha=0.8,
-        )
-        if np.sum(plot_intensity_values) > 1000:
-            if random.random() > 0.01:
-                plt.pause(0.1)
-            else:
-                plt.show()
+            plt.clf()
+            plt.scatter(
+                o_plot_mz_values,
+                o_plot_ims_values,
+                c="gray",
+                s=np.sqrt(o_plot_intensity_values),
+            )
+            plt.scatter(
+                plot_mz_values,
+                plot_ims_values,
+                c=plot_intensity_values,
+                cmap="viridis",
+                s=np.sqrt(plot_intensity_values),
+                alpha=0.8,
+            )
+            if np.sum(plot_intensity_values) > 1000:
+                if random.random() > 0.01:
+                    plt.pause(0.1)
 
     if len(intensity) > FINAL_N_PEAK_FILTER:
         partition_indices = np.argpartition(
@@ -982,6 +982,10 @@ def _preprocess_ims(
         ims = ims[partition_indices]
         mz = mz[partition_indices]
         intensity = intensity[partition_indices]
+
+    # EXPERIMENTAL
+    # Does not seem to make it any better
+    # intensity = np.sqrt(intensity)
 
     return mz, intensity, ims
 

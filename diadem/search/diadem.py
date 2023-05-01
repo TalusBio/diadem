@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import time
 from os import PathLike
 from pathlib import Path
@@ -17,7 +19,13 @@ from diadem.data_io.mzml import ScanGroup, StackedChromatograms
 from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.search.mokapot import brew_run
+from diadem.utilities.logging import InterceptHandler
 from diadem.utilities.utils import plot_to_log
+
+logging.basicConfig(handlers=[InterceptHandler()], level=logging.INFO, force=True)
+
+if "PLOTDIADEM" in os.environ and os.environ["PLOTDIADEM"]:
+    import matplotlib.pyplot as plt  # noqa: I001
 
 
 # @profile
@@ -207,6 +215,30 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             scores = scores.sort_values(by="Score", ascending=False).iloc[:1]
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
+
+            if "PLOTDIADEM" in os.environ and os.environ["PLOTDIADEM"]:
+                try:
+                    ax1.cla()
+                    ax2.cla()
+                except NameError:
+                    fig, (ax1, ax2) = plt.subplots(1, 2)
+
+                new_stack.plot(ax1, matches=match_indices)
+                ax2.plot(group.retention_times, group.base_peak_int)
+                ax2.vlines(
+                    x=group.retention_times[new_stack.parent_index],
+                    ymin=0,
+                    ymax=new_stack.base_peak_intensity,
+                    color="r",
+                )
+                plt.title(
+                    (
+                        f"Score: {scores['Score'].iloc[0]} \n"
+                        f" Peptide: {scores['peptide'].iloc[0]} \n"
+                        f"@ RT: {scores['RetentionTime'].iloc[0]}"
+                    ),
+                )
+                plt.pause(0.1)
 
             scaling_window_indices = [
                 [x[y] for y in match_indices] for x in new_stack.stack_peak_indices
@@ -435,11 +467,13 @@ def diadem_main(
     try:
         # Right now I am bypassing the mokapot results, because they break a test
         # meant to check that no decoys are detected (which is true in that case).
+        logger.info("Running mokapot")
         mokapot_results = brew_run(
             results,
             fasta_path=fasta_path,
             ms_data_path=data_path,
         )
+        logger.info(f"Writting mokapot results to {prefix}.peptides.parquet")
         mokapot_results.to_parquet(prefix + ".peptides.parquet")
     except ValueError as e:
         if "decoy PSMs were detected" in str(e):

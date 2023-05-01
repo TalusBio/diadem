@@ -452,13 +452,14 @@ class StackedChromatograms:
         above_hm = rt >= (rt.max() / 2)
         return above_hm.astype(int).sum()
 
-    def plot(self, plt) -> None:  # noqa
+    def plot(self, plt, matches=None) -> None:  # noqa
         """Plots the stacked chromatogram as lines."""
         # TODO reconsider this implementation, maybe lazy import
         # of matplotlib.
-        plt.plot(self.array.T)
-        plt.plot(self.array[self.ref_index, ...].T, color="black")
-        plt.show()
+        plt.plot(self.array.T, color="gray", alpha=0.5, linewidth=0.5)
+        plt.plot(self.array[self.ref_index, ...].T, color="black", linewidth=2)
+        if matches is not None:
+            plt.plot(self.array[matches, ...].T, color="magenta")
 
     def trace_correlation(self) -> NDArray[np.float32]:
         """Calculate the correlation between the reference trace and all other traces.

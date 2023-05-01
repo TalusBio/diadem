@@ -1,0 +1,31 @@
+
+stages:
+  get_data:
+      cmd: zsh get_data.zsh
+      deps:
+        - src/get_data.zsh
+      outs:
+        - profiling_data
+
+  orbi_run:
+    deps:
+      - scripts/run.py
+      - params/orbi.toml
+  convert_tims_data:
+    cmd: docker run -it --rm -v ${PWD}/profiling_data/:/data alphatims_docker export hdf -t 3 /data/Hela_25ng_22min_9x4_short_S2-A8_1_122.d
+
+
+  tims_run:
+      - params/tims.toml
+      - scripts/run.py
+
+
+plots:
+  - orbi_qvals.csv:
+      y: [n_peptides]
+      x: q_val
+  - orbi_td.png
+  - tims_qvals.csv:
+      y: [n_peptides]
+      x: q_val
+  - tims_td.png

@@ -3,7 +3,6 @@ python -m pip install ../.
 PYTHONOPTIMIZE=1 python run_profile_multithread.py
 
 mokapot lineprofile_results_multithread/results.diadem.tsv.pin --test_fdr 0.01 --keep_decoys
-R -e 'library(tidyverse) ; foo = readr::read_tsv("mokapot.peptides.txt") ; foo2 = readr::read_tsv("mokapot.decoy.peptides.txt") ; g <- ggplot(bind_rows(foo, foo2), aes(x = `mokapot score`, fill = Label)) + geom_density(alpha=0.4) ; ggsave("lineprofile_results_multithread/td_plot.png", plot = g)'
 R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_multithread/results.diadem.tsv.pin") ; g <- ggplot(foo, aes(x = `Score`, fill = factor(Label))) + geom_density(alpha=0.4) ; ggsave("lineprofile_results_multithread/raw_td_plot.png", plot = g)'
 R -e 'library(tidyverse) ; foo = readr::read_tsv("lineprofile_results_multithread/results.diadem.tsv.pin") ; g <- ggplot(foo, aes(x = seq_along(`Score`), y = Score, colour = factor(Label))) + geom_point(alpha=0.4) ; ggsave("lineprofile_results_multithread/iter_score_plot.png", plot = g)'
 
