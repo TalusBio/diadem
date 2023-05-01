@@ -7,6 +7,7 @@ from pathlib import Path
 import mokapot
 import pandas as pd
 
+from diadem.config import DiademConfig
 from diadem.index.protein_index import ProteinNGram
 
 
@@ -14,6 +15,7 @@ def brew_run(
     results: pd.DataFrame,
     fasta_path: PathLike,
     ms_data_path: PathLike,
+    config: DiademConfig,
 ) -> pd.DataFrame:
     """Prepare the result DataFrame for mokapot.
 
@@ -25,6 +27,8 @@ def brew_run(
         The FASTA file that was used for the search.
     ms_data_path : PathLike
         The mass spectrometry data file that was searched.
+    config : DiademConfig
+        The configuration setting.
 
     Returns
     -------
@@ -50,8 +54,14 @@ def brew_run(
         filename_column="filename",
         copy_data=False,
     )
-    results = mokapot.brew(peptides)
-    return results.peptides
+
+    mokapot.PercolatorModel(train_fdr=config.train_fdr)
+    results = mokapot.brew(peptides, test_fdr=config.eval_fdr)
+    targets = results.confidence_estimates["peptides"]
+    decoys = results.decoy_confidence_estiamtes["peptides"]
+    targets["is_target"] = True
+    decoys["is_target"] = False
+    return pd.concat([targets, decoys], axis=1)
 
 
 def _prepare_df(
