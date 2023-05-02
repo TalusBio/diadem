@@ -1,4 +1,5 @@
 import numpy as np
+import polars as pl
 import pytest
 from ms2ml import Peptide
 
@@ -168,3 +169,10 @@ def albumin_peptides():
 
     out = [Peptide.from_proforma_seq(f"{x}/2") for x in ALBUMIN_PEPTIDE_SEQS]
     return out
+
+
+@pytest.fixture
+def get_data(shared_datadir):
+    """Read the parquet files for the quant module and return the dataframes."""
+    return pl.read_parquet(shared_datadir / "small-ms_data.parquet"), \
+           pl.read_parquet(shared_datadir / "small-peptides.parquet")

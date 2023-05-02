@@ -23,7 +23,7 @@ def quant(ms_data: pl.DataFrame, pep: pl.DataFrame()) -> None:
     # Match the peptide to spectra
     pep_spectrum_df = match_peptide(ms_data, pep)
     # Perform peptide quant
-    peptide_quant(ms_data, pep_spectrum_df)
+    return peptide_quant(ms_data, pep_spectrum_df)
 
 
 def match_peptide(ms_data: pl.DataFrame, pep: pl.DataFrame) -> pl.DataFrame:
@@ -118,8 +118,7 @@ def match_peptide(ms_data: pl.DataFrame, pep: pl.DataFrame) -> pl.DataFrame:
 def get_peaks(
     ms_data: pl.DataFrame, row: dict, i: int, next_val: float, right: float = True
 ) -> list:
-    """Helper function to get the corresponding peaks of the peptide at different
-    retention times.
+    """Helper function to get corresponding peaks of a peptide at different rts.
 
     Parameters
     ----------
@@ -169,7 +168,7 @@ def get_peaks(
         # in the range of our data and go 1 rt to the right. Otherwise, go 1 rt to
         # the left.
         if right:
-            if i + 1 > len(ms_data):
+            if i + 1 >= len(ms_data):
                 return intensities, rts
             i += 1
         else:
@@ -186,8 +185,7 @@ def get_peaks(
         #   3. the intensity is leveling off
         if (
             sum_intensity == 0
-            or break_if_up
-            and sum_intensity > last_val + last_val / 100
+            or (break_if_up and sum_intensity > last_val + last_val / 1000)
             or count > 3
         ):
             return intensities, rts
@@ -199,7 +197,7 @@ def get_peaks(
             intensities.append(sum_intensity)
             rts.append(rt)
             last_val = sum_intensity
-            if sum_intensity > last_val + last_val / 100:
+            if sum_intensity > last_val + last_val / 1000:
                 count += 1
             else:
                 count = 0
