@@ -11,8 +11,7 @@ from diadem.config import DiademConfig
 
 
 def searches(
-    scores: Iterable[PathLike],
-    fasta_file: PathLike,
+    scores: Iterable[pl.DataFrame | pl.LazyFrame | PathLike],
     config: DiademConfig,
 ) -> tuple[Path]:
     """Aggregate search results and align retention times.
@@ -33,7 +32,7 @@ def searches(
     proteins : Path
         The accepted proteins
     """
-    agg = SearchAggregator(scores, fasta_file, config)
+    agg = SearchAggregator(scores, config)
     return agg.peptide_path, agg.protein_path
 
 
@@ -53,17 +52,24 @@ class SearchAggregator:
     def __init__(
         self,
         scores: Iterable[PathLike],
-        fasta_file: PathLike,
         config: DiademConfig,
     ) -> None:
         """Initialize the search aggregator."""
         self.scores = scores
-        self.fasta_file = fasta_file
         self.config = config
-        self.peptide_path = Path("diadem.search.peptides.parquet")
-        self.protein_path = Path("diadem.search.proteins.parquet")
 
-        self._peptide = None
+        base_path = Path(self.config.output_dir) / "aggregate"
+        self.peptide_path = base_path / "diadem.search.peptides.parquet"
+        self.protein_path = base_path / "diadem.search.proteins.parquet"
+
+        if not self.config.overwrite:
+            base_msg = "%s already exists and overwrite is disabled."
+            if self.peptide_path.exists():
+                raise RuntimeError(base_msg.format(str(self.peptide_path)))
+            if self.protein_path.exists():
+                raise RuntimeError(base_msg.format(str(self.protein_path)))
+
+        self._peptides = None
         self._proteins = None
         self._ret_time = None
         self._ion_mobility = None
@@ -86,9 +92,18 @@ class SearchAggregator:
     def assign_confidence(self) -> None:
         """Assign confidence across all runs."""
         keep_cols = ["peptide", "target_pair", "is_target", "mokapot score"]
-        score_df = pl.concat(
-            [pl.read_parquet(s, columns=keep_cols) for s in self.scores],
-        )
+        try:
+            score_df = (
+                pl.concat(self.scores, how="vertical")
+                .lazy()
+                .select(keep_cols)
+                .collect()
+            )
+        except TypeError:
+            score_df = pl.concat(
+                [pl.read_parquet(s, columns=keep_cols) for s in self.scores],
+                how="vertical",
+            )
 
         peptides = LinearPsmDataset(
             psms=(score_df.with_columns(pl.lit("").alias("proteins")).to_pandas()),
@@ -101,7 +116,7 @@ class SearchAggregator:
         )
 
         peptides.add_proteins(
-            self.fasta_file,
+            self.config.fasta_file,
             enzyme=self.config.db_enzyme,
             missed_cleavages=self.config.db_max_missed_cleavages,
             min_length=self.config.peptide_length_range[0],
@@ -130,13 +145,15 @@ class SearchAggregator:
         keep_cols = ["peptide", "filename", "mokapot q-value"]
         rt_df = []
         im_df = []
-        for run_file in self.scores:
-            run_df = (
-                pl.read_parquet(run_file, columns=keep_cols)
-                .filter(pl.col("mokapot q-value") <= self.config.eval_fdr)
-                .drop("mokapot q-value")
-                .merge(self._peptides, how="right")
-            )
+        for run in self.scores:
+            try:
+                run_df = pl.read_parquet(run, columns=keep_cols).lazy()
+            except TypeError:
+                run_df = run.select(keep_cols).lazy()
+
+            run_df = run_df.filter(
+                pl.col("mokapot q-value") <= self.config.eval_fdr,
+            ).drop("mokapot q-value")
 
             fname = run_df["filename"][0]
 
@@ -196,6 +213,7 @@ class SearchAggregator:
 
     def save(self) -> tuple(Path):
         """Save the aggregated results."""
+        self.peptide_path.parent.mkdir(exist_ok=True)
         pep_dfs = [self._peptides, self._ret_time, self._ion_mobility]
         pl.concat(pep_dfs, how="horizontally").write_parquet(self.peptide_path)
         self._proteins.write_parquet(self.protein_path)
