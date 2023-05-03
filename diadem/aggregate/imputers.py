@@ -7,8 +7,8 @@ from collections.abc import Iterable
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 from sklearn.exceptions import NotFittedError
+from torch import nn
 from tqdm import trange
 
 LOGGER = logging.getLogger(__name__)

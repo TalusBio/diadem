@@ -1,4 +1,5 @@
 """Unit tests for mokapot interactions."""
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -28,8 +29,14 @@ def test_prepare_df(kid_fasta):
     in_df = pd.DataFrame(
         {
             "rank": [1, 2, 1, 1, 1],
-            "peptide": ["EDITH", "EDITH", "LES[+79.9]LIE", "LILS[+79.9]EE", "AAAR"],
-            "list_col": [[1, 2]] * 5,
+            "peptide": [
+                "<[UNIMOD:4]@T>EDITH/2",
+                "<[UNIMOD:4]@T>EDITH/2",
+                "LES[+79.9]LIE/3",
+                "LILS[+79.9]EE/3",
+                "AAAR/2",
+            ],
+            "list_col": [np.array([1, 2])] * 5,
             "cool_npeaks": [5, 5, 6, 6, 4],
             "decoy": [False, False, False, True, False],
         },
