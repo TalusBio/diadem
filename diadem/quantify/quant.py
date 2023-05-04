@@ -219,6 +219,9 @@ def get_peaks(
             rts.append(rt)
             last_val = sum_intensity
             count = 0
+
+        # If the intensities are the same, update the count and return if
+        # the count is 3 or more. Otherwise, append to intensities and rts.
         elif last_val == sum_intensity:
             count += 1
             if count >= 3:
@@ -291,8 +294,7 @@ def peptide_quant(ms_data: pl.DataFrame, matched_df: pl.DataFrame) -> pl.DataFra
     # Add row numbers to the mass spec dataframe so I can easily go to the right
     # and left rts (this can be changed later to something more elegant)
     num_ms_data = ms_data.with_row_count()
-    matched_df.to_pandas()
-    num_ms_data.to_pandas()
+
     # Iterate through each row in the peptide-spectrum matched dataframe and
     # get the intensities for each peptide
     for row in matched_df.rows(named=True):
