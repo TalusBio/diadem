@@ -7,24 +7,34 @@ import diadem.quantify.quant as q
 
 def test_quant(get_data):
     """Test that the entire module returns the correct data."""
-    # NOTE: For some reason polars `assert_frame_equals` function is
-    # failing, but pandas works fine. I'll fix later.
-    ms_data, peptides = get_data
-    quant_results = q.quant(ms_data, peptides).to_pandas()
+    ms_data, pep = get_data
+    quant_results = q.quant(ms_data, pep)
     manual_results = pl.DataFrame(
         {
-            "peptide": ["PEPTIDEEEE", "LESLIE"],
+            "peptide": ["PEPTIDEEEE", "LESLIE", "EDITH"],
             "intensity": [
                 np.trapz([610.00, 100.00]),
                 np.trapz([1111.00, (2210.00 + 1560.00), 4000.00]),
+                np.trapz(
+                    [
+                        110.8,
+                        110.8,
+                        110.8,
+                        123.1,
+                        456.4,
+                        765.7,
+                        321.3,
+                        110.8,
+                        110.8,
+                        110.8,
+                    ]
+                ),
             ],
-            "mz": [100.01, np.average([249.99, 249.985])],
-            "num_fragments": [2.0, 3.0],
+            "mz": [100.01, np.average([249.99, 249.985]), 100.0],
+            "num_fragments": [2.0, 3.0, 10.0],
         }
-    ).to_pandas()
-    assert quant_results.equals(manual_results)
-    # assert_frame_equal(quant_results, manual_results)
-    # ^^^ NOT WORKING even when comparing the same dataframe
+    )
+    assert_frame_equal(manual_results, quant_results)
 
 
 def test_match_peptide(get_data):
@@ -33,11 +43,11 @@ def test_match_peptide(get_data):
     match_result = q.match_peptide(ms_data, peptides)
     manual_result = pl.DataFrame(
         {
-            "peptide": ["PEPTIDEEEE", "LESLIE"],
-            "rt": [100.0, 150.0],
-            "intensity": [610.00, (2210.00 + 1560.00)],
-            "mz": [100.01, np.average([249.99, 249.985])],
-            "ims": [99.982, np.average([149.98, 150.01])],
+            "peptide": ["PEPTIDEEEE", "LESLIE", "EDITH"],
+            "rt": [100.0, 150.0, 5.0],
+            "intensity": [610.00, (2210.00 + 1560.00), 123.1],
+            "mz": [100.01, np.average([249.99, 249.985]), 100.0],
+            "ims": [99.982, np.average([149.98, 150.01]), 100.0],
         }
     )
     assert_frame_equal(match_result, manual_result)
