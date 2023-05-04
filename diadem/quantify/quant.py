@@ -27,7 +27,7 @@ def quant(ms_data: pl.DataFrame, pep: pl.DataFrame()) -> None:
 
 
 def match_peptide(ms_data: pl.DataFrame, pep: pl.DataFrame) -> pl.DataFrame:
-    """Helper function to get the intensity of a peak at a given retention time.
+    """Map the peptide to a peak in the mass spec data.
 
     Parameters
     ----------
@@ -49,8 +49,13 @@ def match_peptide(ms_data: pl.DataFrame, pep: pl.DataFrame) -> pl.DataFrame:
     for row in ms_data.rows(named=True):
         # Convert the mzs to a series so they are easier to use
         row["mzs"] = pl.Series(row["mzs"])
+        # Make sure we are looking at the correct precursor window
+        peptides = pep.filter(
+            (pl.col("PrecursorMZ") >= row["precursor_start"])
+            & (pl.col("PrecursorMZ") <= row["precursor_end"])
+        )
         # Get all peptides at the given retention time
-        peptide = pep.filter(pl.col("RetentionTime") == row["rts"])
+        peptide = peptides.filter(pl.col("RetentionTime") == row["rts"])
         # For each peptide at the retention time, find the most intense peak and sum
         # across ion mobility
         for p in peptide.rows(named=True):
