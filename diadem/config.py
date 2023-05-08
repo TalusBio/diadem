@@ -116,8 +116,8 @@ class DiademIndexConfig:
         -----
         Python adds a seed to the hash, therefore the has will be different
 
-        Example
-        -------
+        Examples
+        --------
         >>> DiademIndexConfig().hash()
         '1a23e68d04576bb73dbd5e0173679e64'
         >>> DiademIndexConfig(ion_series = "y").hash()

@@ -69,6 +69,8 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
     IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
     MAX_NUM_CONSECUTIVE_FAILS = 50  # noqa
 
+    start_rts, start_bpc = group.retention_times.copy(), group.base_peak_int.copy()
+
     new_window_kwargs = {
         "window": WINDOWSIZE,
         "min_intensity_ratio": MIN_INTENSITY_RATIO,
@@ -224,6 +226,8 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                     fig, (ax1, ax2) = plt.subplots(1, 2)
 
                 new_stack.plot(ax1, matches=match_indices)
+
+                ax2.plot(start_rts, start_bpc, alpha=0.2, color="gray")
                 ax2.plot(group.retention_times, group.base_peak_int)
                 ax2.vlines(
                     x=group.retention_times[new_stack.parent_index],

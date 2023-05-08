@@ -10,3 +10,6 @@ profile*.txt
 
 **mokapot*.txt
 *.png
+
+profiling_data_bkp
+*/*.parquet

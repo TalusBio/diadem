@@ -1,24 +1,24 @@
 
 stages:
   get_data:
-      cmd: zsh get_data.zsh
+      cmd: zsh src/get_data.zsh
       deps:
         - src/get_data.zsh
+        - Dockerfile
       outs:
-        - profiling_data
+        - profiling/profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+        - profiling_data/UP000000625_83333_crap.fasta
+        - profiling_data/UP000005640_9606_crap.fasta
 
   orbi_run:
     deps:
-      - scripts/run.py
-      - params/orbi.toml
-  convert_tims_data:
-    cmd: docker run -it --rm -v ${PWD}/profiling_data/:/data alphatims_docker export hdf -t 3 /data/Hela_25ng_22min_9x4_short_S2-A8_1_122.d
-
+      - src/run.py
+      - config/orbi.toml
+    cmd: python src/run.py --
 
   tims_run:
-      - params/tims.toml
-      - scripts/run.py
-
+      - src/run.py
+      - config/tims.toml
 
 plots:
   - orbi_qvals.csv:
