@@ -61,8 +61,8 @@ class BaseDiademInterface(ABC):
         missing_columns = set(req_dtypes.keys())
         for col, dtype in zip(self.data.columns, self.data.dtypes):
             dtype = _check_for_poly_dtype(dtype)
-            if not dtype == req_dtypes[dtype]:
-                dtype_errors.append((col, dtype, req_dtypes[dtype]))
+            if not dtype == req_dtypes[col]:
+                dtype_errors.append((col, dtype, req_dtypes[col]))
 
             try:
                 missing_columns.remove(col)
@@ -72,24 +72,24 @@ class BaseDiademInterface(ABC):
         if not dtype_errors and not missing_columns:
             return
 
-        dtype_msg = [
-            f"  - {n}: {d} (Expected {'or'.join(r)})" for n, d, r in dtype_errors
-        ]
-        missing_msg = [f"  - {c}" for c in missing_columns]
-
         msg = []
         if dtype_errors:
+            dtype_msg = [
+                f"  - {n}: {d} (Expected {','.join([str(i) for i in r])})"
+                for n, d, r in dtype_errors
+            ]
             msg.append("Some columns were of the wrong data type:")
             msg += dtype_msg
 
         if missing_columns:
+            missing_msg = [f"  - {c[0]}" for c in missing_columns]
             msg.append("Some columns were missing:")
             msg += missing_msg
 
         raise ValueError("\n".join(msg))
 
-    @abstractmethod
     @property
+    @abstractmethod
     def required_columns(self) -> Iterable[RequiredColumn]:
         """The required columns for the underlying DataFrame."""
 
@@ -143,7 +143,7 @@ def _check_for_poly_dtype(
     -------
     set[pl.datatypes.DataType]
     """
-    dtype = set(dtype)
+    dtype = {dtype}
     for poly_dtype in POLY_DTYPES:
         if dtype.issubset(poly_dtype):
             return poly_dtype
