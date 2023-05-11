@@ -50,7 +50,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
     WINDOWSIZE = config.run_window_size  # noqa
     WINDOW_MAX_PEAKS = config.run_max_peaks_per_window  # noqa
 
-    MIN_INTENSITY_SCALING, MAX_INTENSITY_SCALING = config.run_scalin_limits  # noqa
+    MIN_INTENSITY_SCALING, MAX_INTENSITY_SCALING = config.run_scaling_limits  # noqa
     SCALING_RATIO = config.run_scaling_ratio  # noqa
 
     # Min intensity required on a peak in the base
@@ -218,6 +218,14 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
 
+            corr_match_indices = np.where(
+                new_stack.correlations
+                > np.median(new_stack.correlations[match_indices]),
+            )[0]
+            match_indices = np.sort(
+                np.unique(np.concatenate([match_indices, corr_match_indices])),
+            )
+
             if "PLOTDIADEM" in os.environ and os.environ["PLOTDIADEM"]:
                 try:
                     ax1.cla()
@@ -242,7 +250,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                         f"@ RT: {scores['RetentionTime'].iloc[0]}"
                     ),
                 )
-                plt.pause(0.1)
+                plt.pause(0.01)
 
             scaling_window_indices = [
                 [x[y] for y in match_indices] for x in new_stack.stack_peak_indices
@@ -417,7 +425,7 @@ def diadem_main(
     results = []
 
     if config.run_parallelism == 1:
-        for group in ss.yield_iso_window_groups(progress=True):
+        for group in ss.yield_iso_window_groups():
             group_db = db.index_prefiltered_from_parquet(cache, *group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
             if group_results is not None:

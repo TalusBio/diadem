@@ -400,6 +400,7 @@ class StackedChromatograms:
     base_peak_intensity: float
     stack_peak_indices: list[list[int]] | list[NDArray[np.int32]]
     center_intensities: NDArray[np.float32]
+    correlations: NDArray
 
     def __post_init__(self) -> None:
         """Checks that the dimensions of the arrays are correct.
@@ -565,11 +566,14 @@ class StackedChromatograms:
 
             max_peak_corr = np.sort(corrs)[-max_peaks] if len(corrs) > max_peaks else -1
             keep = corrs >= max(min_correlation, max_peak_corr)
+            keep_corrs = corrs[keep]
 
             stacked_arr = stacked_arr[..., keep, ::1]
             center_mzs = center_mzs[keep]
             center_intensities = center_intensities[keep]
             indices = [[y for y, k in zip(x, keep) if k] for x in indices]
+        else:
+            keep_corrs = np.array([1.0])
 
         ref_id = np.argmax(stacked_arr[..., center_index])
         bp_int = stacked_arr[ref_id, center_index]
@@ -582,6 +586,7 @@ class StackedChromatograms:
             base_peak_intensity=bp_int,
             stack_peak_indices=indices,
             center_intensities=center_intensities,
+            correlations=keep_corrs,
         )
         return out
 

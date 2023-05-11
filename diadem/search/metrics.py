@@ -26,6 +26,16 @@ def cosinesim(x: NDArray, y: NDArray) -> NDArray:
     return out
 
 
+def max_rolling(a, window, axis=1):
+    """From this answer:
+    https://stackoverflow.com/a/52219082.
+    """
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+    strides = a.strides + (a.strides[-1],)
+    rolling = np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+    return np.max(rolling, axis=axis)
+
+
 def spectral_angle(x: NDArray, y: NDArray) -> NDArray:
     """Computes the spectral angle between two vectors.
 
@@ -75,6 +85,7 @@ def get_ref_trace_corrs(arr: NDArray[np.float32], ref_idx: int) -> NDArray[np.fl
     >>> [round(x, 4) for x in out]
     [0.8355, 0.8597, 0.8869, 0.9182, 0.9551, 0.9989, 0.9436, 0.8704, 0.7722, 0.6385]
     """
+    arr = max_rolling(arr, 3, axis=1)
     norm = np.linalg.norm(arr + 1e-5, axis=-1)
     normalized_arr = arr / np.expand_dims(norm, axis=-1)
     ref_trace = normalized_arr[..., ref_idx, ::1]

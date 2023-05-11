@@ -6,7 +6,7 @@ stages:
         - src/get_data.zsh
         - Dockerfile
       outs:
-        - profiling/profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+        - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
         - profiling_data/UP000000625_83333_crap.fasta
         - profiling_data/UP000005640_9606_crap.fasta
 
@@ -14,11 +14,36 @@ stages:
     deps:
       - src/run.py
       - config/orbi.toml
-    cmd: python src/run.py --
+      - profiling_data/UP000000625_83333_crap.fasta
+      - profiling_data/XXXXXXXXXX.raw
+    outs:
+      - results/orbi/ecoli.diadem.csv
+    cmd: >-
+        mkdir -p results/orbi
+        python src/run.py
+          --config config/orbi.toml
+          --fasta profiling_data/UP000000625_83333_crap.fasta
+          --ms_data profiling_data/xxxxxxxxxxxx.raw
+          --output results/orbi/ecoli
+          --threads 4
 
   tims_run:
+    deps:
+      - src/run.py
+      - configs/tims.toml
+      - profiling_data/UP000000625_83333_crap.fasta
+      - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
       - src/run.py
       - config/tims.toml
+    outs:
+      - results/tims/ecoli.diadem.csv
+    cmd: >-
+        python src/run.py
+          --config configs/tims.toml
+          --fasta profiling_data/UP000000625_83333_crap.fasta
+          --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+          --output results/tims/ecoli
+          --threads 4
 
 plots:
   - orbi_qvals.csv:
