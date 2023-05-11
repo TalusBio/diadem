@@ -99,6 +99,20 @@ def main():
     plt.savefig(Path(base_dir) / f"{prefix}_peptide_qval.png")
     plt.clf()
 
+    metrics = {}
+    metrics["NumPeptides"] = len(qvals)
+    metrics["AvgTargetScore"] = df.filter(pl.col("decoy").is_not())["Score"].mean()
+    metrics["TargetQ95Score"] = df.filter(pl.col("decoy").is_not())["Score"].quantile(
+        0.95,
+    )
+    metrics["AvgDecoyScore"] = df.filter(pl.col("decoy"))["Score"].mean()
+    metrics["DecoyQ95Score"] = df.filter(pl.col("decoy"))["Score"].quantile(0.95)
+
+    # Write metrics to toml file
+    with open(Path(base_dir) / f"{prefix}_metrics.toml", "w") as f:
+        for k, v in metrics.items():
+            f.write(f"{k} = {v}\n")
+
 
 if __name__ == "__main__":
     main()
