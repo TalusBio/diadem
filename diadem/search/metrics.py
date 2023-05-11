@@ -26,8 +26,19 @@ def cosinesim(x: NDArray, y: NDArray) -> NDArray:
     return out
 
 
-def max_rolling(a, window, axis=1):
-    """From this answer:
+def max_rolling(a: np.ndarray, window: int, axis: int = 1) -> np.ndarray:
+    """Max window smoothing on a numpy array.
+
+    Parameters
+    ----------
+    a: np.ndarray
+        The array to smooth.
+    window: int
+        The size of the window.
+    axis: int
+        The axis along which to smooth.
+
+    From this answer:
     https://stackoverflow.com/a/52219082.
     """
     shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
