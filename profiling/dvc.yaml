@@ -41,10 +41,14 @@ stages:
     outs:
       - results/tims/hela.diadem.csv
     plots:
-      - results/tims/hela_log_score_histogram_peptide.png
-      - results/tims/hela_score_histogram_peptide.png
-      - results/tims/hela_peptide_qval.png
-      - results/tims/hela_score_histogram_psm.png
+      - results/tims/hela_log_score_histogram_peptide.png:
+          cache: false
+      - results/tims/hela_score_histogram_peptide.png:
+          cache: false
+      - results/tims/hela_peptide_qval.png:
+          cache: false
+      - results/tims/hela_score_histogram_psm.png:
+          cache: false
     metrics:
       - results/tims/hela_metrics.toml:
           cache: false
@@ -69,10 +73,14 @@ stages:
     outs:
       - results/tims/ecoli.diadem.csv
     plots:
-      - results/tims/ecoli_log_score_histogram_peptide.png
-      - results/tims/ecoli_score_histogram_peptide.png
-      - results/tims/ecoli_peptide_qval.png
-      - results/tims/ecoli_score_histogram_psm.png
+      - results/tims/ecoli_log_score_histogram_peptide.png:
+          cache: false
+      - results/tims/ecoli_score_histogram_peptide.png:
+          cache: false
+      - results/tims/ecoli_peptide_qval.png:
+          cache: false
+      - results/tims/ecoli_score_histogram_psm.png:
+          cache: false
     metrics:
       - results/tims/ecoli_metrics.toml:
           cache: false
