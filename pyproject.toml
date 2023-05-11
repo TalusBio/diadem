@@ -60,7 +60,8 @@ profiling = [
     "line_profiler",
 ]
 plot = [
-    "matplotlib"
+    "matplotlib",
+    "vizta",
 ]
 dev = [
     "ruff >= 0.0.253",

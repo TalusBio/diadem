@@ -6,51 +6,80 @@ stages:
         - src/get_data.zsh
         - Dockerfile
       outs:
-        - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+        - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
+        - profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+        - profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
         - profiling_data/UP000000625_83333_crap.fasta
         - profiling_data/UP000005640_9606_crap.fasta
 
   orbi_run:
+    params:
+      - configs/orbi.toml:
     deps:
       - src/run.py
-      - config/orbi.toml
       - profiling_data/UP000000625_83333_crap.fasta
-      - profiling_data/XXXXXXXXXX.raw
+      - profiling_data/UP000005640_9606_crap.fasta
     outs:
-      - results/orbi/ecoli.diadem.csv
+      - results/orbi/hela.diadem.csv
     cmd: >-
-        mkdir -p results/orbi
+        mkdir -p results/orbi &&
         python src/run.py
-          --config config/orbi.toml
-          --fasta profiling_data/UP000000625_83333_crap.fasta
-          --ms_data profiling_data/xxxxxxxxxxxx.raw
-          --output results/orbi/ecoli
-          --threads 4
+        --config configs/orbi.toml
+        --fasta profiling_data/UP000005640_9606_crap.fasta
+        --ms_data profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
+        --output results/orbi/hela
+        --threads 4 &&
+        python src/plot_results.py results/orbi --prefix hela
 
-  tims_run:
+  tims_run_hela:
+    params:
+      - configs/tims.toml:
     deps:
       - src/run.py
-      - configs/tims.toml
-      - profiling_data/UP000000625_83333_crap.fasta
-      - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+      - profiling_data/UP000005640_9606_crap.fasta
+      - profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+    outs:
+      - results/tims/hela.diadem.csv
+      - results/tims/hela_log_score_histogram_peptide.png
+      - results/tims/hela_score_histogram_peptide.png
+      - results/tims/hela_peptide_qval.png
+      - results/tims/hela_score_histogram_psm.png
+    cmd: >-
+        mkdir -p results/tims &&
+        python src/run.py
+        --config configs/tims.toml
+        --fasta profiling_data/UP000005640_9606_crap.fasta
+        --ms_data profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+        --output results/tims/hela
+        --threads 4 &&
+        python src/plot_results.py results/tims --prefix hela
+
+  tims_run_ecoli:
+    params:
+      - configs/tims.toml:
+    deps:
       - src/run.py
-      - config/tims.toml
+      - profiling_data/UP000000625_83333_crap.fasta
+      - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
+      - src/run.py
     outs:
       - results/tims/ecoli.diadem.csv
+      - results/tims/ecoli_log_score_histogram_peptide.png
+      - results/tims/ecoli_score_histogram_peptide.png
+      - results/tims/ecoli_peptide_qval.png
+      - results/tims/ecoli_score_histogram_psm.png
     cmd: >-
         python src/run.py
-          --config configs/tims.toml
-          --fasta profiling_data/UP000000625_83333_crap.fasta
-          --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
-          --output results/tims/ecoli
-          --threads 4
+        --config configs/tims.toml
+        --fasta profiling_data/UP000000625_83333_crap.fasta
+        --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
+        --output results/tims/ecoli
+        --threads 4 &&
+        python src/plot_results.py results/tims --prefix ecoli
+
 
 plots:
-  - orbi_qvals.csv:
-      y: [n_peptides]
-      x: q_val
-  - orbi_td.png
-  - tims_qvals.csv:
-      y: [n_peptides]
-      x: q_val
-  - tims_td.png
+  - results/tims/ecoli_log_score_histogram_peptide.png
+  - results/tims/ecoli_score_histogram_peptide.png
+  - results/tims/ecoli_peptide_qval.png
+  - results/tims/ecoli_score_histogram_psm.png

@@ -15,9 +15,6 @@ aws s3 cp --profile mfa s3://data-pipeline-metadata-bucket/contaminants.fasta ./
 cat ./profiling_data/contaminants.fasta ./profiling_data/UP000000625_83333.fasta >> ./profiling_data/UP000000625_83333_crap.fasta
 cat ./profiling_data/contaminants.fasta ./profiling_data/UP000005640_9606.fasta >> ./profiling_data/UP000005640_9606_crap.fasta
 
-# ./profiling_data/UP000000625_83333_crap.fasta
-# ./profiling_data/UP000005640_9606_crap.fasta
-
 # Raw Data
 # Ecoli
 # TimsTof
@@ -25,13 +22,17 @@ curl ftp.pride.ebi.ac.uk/pride/data/archive/2022/02/PXD028735/LFQ_timsTOFPro_dia
 
 # Human
 # Orbi
-aws s3 cp --profile mfa s3://tmp-jspp-diadem-assets/220119_hela_44m_1.mzML.gz
+aws s3 cp --profile mfa s3://tmp-jspp-diadem-assets/230407_Chrom_60m_1ug_v2_01.mzML.gz ./profiling_data/.
 
 # TimsTof
+aws s3 cp --profile mfa s3://tmp-jspp-diadem-assets/230426_Hela_01.d.tar ./profiling_data/.
 
 
 for i in  ./profiling_data/*.zip ; do unzip $i -d profiling_data ; done
+for i in ./profiling_data/*.tar ; do tar -xf $i -C profiling_data ; done
+for i in ./profiling_data/*.gz ; do gunzip -d $i ; done
 
 # This is done in docker ... still waiting for the mann lab to check my PR
 docker build -t alphatims_docker .
-docker run -rm -it -v ${PWD}/profiling_data/:/data/ alphatims export hdf LFQ_timsTOFPro_diaPASEF_Ecoli_01
+docker run --rm -it -v ${PWD}/profiling_data/:/data/ alphatims_docker export hdf /data/230426_Hela_01_S4-E5_1_662.d
+docker run --rm -it -v ${PWD}/profiling_data/:/data/ alphatims_docker export hdf /data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d
