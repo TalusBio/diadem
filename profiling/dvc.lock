@@ -1,10 +1,10 @@
 schema: '2.0'
 stages:
   tims_run_hela:
-    cmd: 'mkdir -p results/tims && python src/run.py --config configs/tims.toml --fasta
+    cmd: mkdir -p results/tims && python src/run.py --config configs/tims.toml --fasta
       profiling_data/UP000005640_9606_crap.fasta --ms_data profiling_data/230426_Hela_01_S4-E5_1_662.hdf
       --output results/tims/hela --threads 4 && python src/plot_results.py results/tims
-      --prefix hela '
+      --prefix hela
     deps:
     - path: profiling_data/230426_Hela_01_S4-E5_1_662.hdf
       md5: 02f5846145d04ff9301f78d2b6299b75
@@ -66,6 +66,9 @@ stages:
     - path: results/tims/hela_log_score_histogram_peptide.png
       md5: 2f06cdc3315a19ef9b85f1ba3d042efb
       size: 18959
+    - path: results/tims/hela_metrics.toml
+      md5: 01b8ef67d59b1afc4e2ad11aa8e2adb4
+      size: 159
     - path: results/tims/hela_peptide_qval.png
       md5: 5f65816667e975520669f8e30b733ec8
       size: 20114
@@ -76,9 +79,9 @@ stages:
       md5: 4ddc3d4f219ba74e2b7954767ac55b37
       size: 17891
   tims_run_ecoli:
-    cmd: 'python src/run.py --config configs/tims.toml --fasta profiling_data/UP000000625_83333_crap.fasta
-      --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.d --output results/tims/ecoli
-      --threads 4 && python src/plot_results.py results/tims --prefix ecoli '
+    cmd: python src/run.py --config configs/tims.toml --fasta profiling_data/UP000000625_83333_crap.fasta
+      --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf --output results/tims/ecoli
+      --threads 4 && python src/plot_results.py results/tims --prefix ecoli
     deps:
     - path: profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
       md5: 764764d9da856aab25d562b4c8c835e2
@@ -143,6 +146,9 @@ stages:
     - path: results/tims/ecoli_log_score_histogram_peptide.png
       md5: 93d29ba9829cdf9477f074c7bedb3b99
       size: 18936
+    - path: results/tims/ecoli_metrics.toml
+      md5: fe327b9c34d60ff26c52c2cb5def5829
+      size: 160
     - path: results/tims/ecoli_peptide_qval.png
       md5: 512cfec09b0fdc8faf632daebc5476b1
       size: 21246
