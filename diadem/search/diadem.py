@@ -67,7 +67,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
 
     IMS_TOLERANCE = config.g_ims_tolerance  # noqa
     IMS_TOLERANCE_UNIT = config.g_ims_tolerance_unit  # noqa
-    MAX_NUM_CONSECUTIVE_FAILS = 50  # noqa
+    MAX_NUM_CONSECUTIVE_FAILS = 100  # noqa
 
     start_rts, start_bpc = group.retention_times.copy(), group.base_peak_int.copy()
 
@@ -218,9 +218,13 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             match_indices = scores["spec_indices"].iloc[0] + [new_stack.ref_index]
             match_indices = np.sort(np.unique(np.array(match_indices)))
 
+            min_corr_score_scale = np.quantile(
+                new_stack.correlations[match_indices],
+                0.75,
+            )
+            scores["q75_correlation"] = min_corr_score_scale
             corr_match_indices = np.where(
-                new_stack.correlations
-                > np.median(new_stack.correlations[match_indices]),
+                new_stack.correlations > min_corr_score_scale,
             )[0]
             match_indices = np.sort(
                 np.unique(np.concatenate([match_indices, corr_match_indices])),
@@ -235,19 +239,20 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
 
                 new_stack.plot(ax1, matches=match_indices)
 
-                ax2.plot(start_rts, start_bpc, alpha=0.2, color="gray")
-                ax2.plot(group.retention_times, group.base_peak_int)
+                ax2.plot(start_rts, np.sqrt(start_bpc), alpha=0.2, color="gray")
+                ax2.plot(group.retention_times, np.sqrt(group.base_peak_int))
                 ax2.vlines(
                     x=group.retention_times[new_stack.parent_index],
                     ymin=0,
-                    ymax=new_stack.base_peak_intensity,
+                    ymax=np.sqrt(new_stack.base_peak_intensity),
                     color="r",
                 )
                 plt.title(
                     (
                         f"Score: {scores['Score'].iloc[0]} \n"
                         f" Peptide: {scores['peptide'].iloc[0]} \n"
-                        f"@ RT: {scores['RetentionTime'].iloc[0]}"
+                        f"@ RT: {scores['RetentionTime'].iloc[0]} \n"
+                        f"Corr Score: {min_corr_score_scale}"
                     ),
                 )
                 plt.pause(0.01)

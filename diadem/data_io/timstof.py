@@ -10,7 +10,6 @@ from typing import Literal
 
 import numpy as np
 import polars as pl
-from alphatims.bruker import TimsTOF
 from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml.utils.mz_utils import get_tolerance
@@ -442,7 +441,7 @@ class TimsSpectrumStacker(SpectrumStacker):
             self.unique_precursor_windows = unique_windows.rows(named=True)
 
     @contextmanager
-    def lazy_datafile(self) -> TimsTOF:
+    def lazy_datafile(self) -> pl.LazyFrame:
         """Scans the cached version of the data and yields it as a context manager."""
         yield pl.scan_parquet(self.cache_location)
 

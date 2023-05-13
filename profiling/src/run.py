@@ -1,4 +1,5 @@
 import argparse
+import time
 from dataclasses import replace
 
 from diadem import cli
@@ -20,6 +21,7 @@ if __name__ == "__main__":
     config = DiademConfig.from_toml(args.config)
     config = replace(config, run_parallelism=args.threads)
 
+    st = time.time()
     cli.setup_logger()
     cli.diadem_main(
         fasta_path=args.fasta,
@@ -27,3 +29,6 @@ if __name__ == "__main__":
         config=config,
         out_prefix=args.output,
     )
+    tt = time.time() - st
+    with open(args.output + "_runtime.toml", "w") as f:
+        f.write(f"runtime = {tt}\n")

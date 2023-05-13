@@ -59,6 +59,8 @@ def main():
     )
     plt.legend()
     plt.title(f"PSM Score Histogram\n{prefix}")
+    plt.xlabel("score")
+    plt.ylabel("Frequency")
     plt.savefig(Path(base_dir) / f"{prefix}_score_histogram_psm.png")
     plt.clf()
 
@@ -80,11 +82,28 @@ def main():
     )
     plt.legend()
     plt.title(f"Peptide Score Histogram\n{prefix}")
+    plt.xlabel("score")
+    plt.ylabel("Frequency")
     plt.savefig(Path(base_dir) / f"{prefix}_score_histogram_peptide.png")
 
     plt.yscale("log")
     plt.title(f"Peptide Score Histogram (log scale)\n{prefix}")
+    plt.xlabel("log(score)")
+    plt.ylabel("Frequency")
     plt.savefig(Path(base_dir) / f"{prefix}_log_score_histogram_peptide.png")
+    plt.clf()
+
+    plt.scatter(
+        y=df["Score"],
+        x=np.arange(len(df)),
+        c=["red" if x else "blue" for x in df["decoy"]],
+        s=0.5,
+        alpha=0.4,
+    )
+    plt.xlabel("Iteration")
+    plt.ylabel("Score")
+    plt.title(f"Peptide Score Over Iterations\n{prefix}")
+    plt.savefig(Path(base_dir) / f"{prefix}_scores_over_time.png")
     plt.clf()
 
     pep_parquet = pl.scan_parquet(peptide_matches[0])
@@ -100,7 +119,7 @@ def main():
     plt.clf()
 
     metrics = {}
-    metrics["NumPeptides"] = len(qvals)
+    metrics["NumPeptides_q_0.01"] = len(qvals.filter(pl.col("mokapot q-value") < 0.01))
     metrics["AvgTargetScore"] = df.filter(pl.col("decoy").is_not())["Score"].mean()
     metrics["TargetQ95Score"] = df.filter(pl.col("decoy").is_not())["Score"].quantile(
         0.95,

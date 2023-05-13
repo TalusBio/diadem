@@ -12,12 +12,26 @@ stages:
         - profiling_data/UP000000625_83333_crap.fasta
         - profiling_data/UP000005640_9606_crap.fasta
 
-  orbi_run:
+  orbi_run_hela:
     params:
       - configs/orbi.toml:
+    plots:
+      - results/orbi/hela_log_score_histogram_peptide.png:
+          cache: false
+      - results/orbi/hela_score_histogram_peptide.png:
+          cache: false
+      - results/orbi/hela_peptide_qval.png:
+          cache: false
+      - results/orbi/hela_score_histogram_psm.png:
+          cache: false
+    metrics:
+      - results/orbi/hela_metrics.toml:
+          cache: false
+      - results/orbi/hela_runtime.toml:
+          cache: false
     deps:
       - src/run.py
-      - profiling_data/UP000000625_83333_crap.fasta
+      - profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
       - profiling_data/UP000005640_9606_crap.fasta
     outs:
       - results/orbi/hela.diadem.csv
@@ -52,6 +66,8 @@ stages:
     metrics:
       - results/tims/hela_metrics.toml:
           cache: false
+      - results/tims/hela_runtime.toml:
+          cache: false
     cmd: >-
         mkdir -p results/tims &&
         python src/run.py
@@ -83,6 +99,8 @@ stages:
           cache: false
     metrics:
       - results/tims/ecoli_metrics.toml:
+          cache: false
+      - results/tims/ecoli_runtime.toml:
           cache: false
     cmd: >-
         python src/run.py
