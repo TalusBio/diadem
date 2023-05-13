@@ -9,4 +9,10 @@ line_profile*.txt
 profile*.txt
 
 **mokapot*.txt
-*.png
+
+profiling_data_bkp
+*/*.parquet
+*.parquet
+
+dvc_plots
+bkp

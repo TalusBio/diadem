@@ -14,7 +14,6 @@ def test_peptide_scoring(sample_peaks, albumin_peptides):
     db = IndexedDb(config=diadem_config, chunksize=64)
     db.targets = albumin_peptides
     db.index_from_sequences()
-    # breakpoint()
     scores = db.hyperscore(z2_mass, mzs, ints)
     assert "VPQVSTPTLVEVSR/2" in set(scores["peptide"])
     return db

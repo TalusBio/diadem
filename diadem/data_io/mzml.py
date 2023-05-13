@@ -2,25 +2,22 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from joblib import Parallel, delayed
 from loguru import logger
-from ms2ml import Spectrum
-from ms2ml.data.adapters import MZMLAdapter
+from msflattener.mzml import get_mzml_data
 from numpy.typing import NDArray
-from pandas import DataFrame
-from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig, MassError
 from diadem.data_io.utils import slice_from_center, strictzip, xic
-from diadem.deisotoping import deisotope
 from diadem.search.metrics import get_ref_trace_corrs
-from diadem.utilities.utils import check_sorted, plot_to_log
+from diadem.utilities.utils import is_sorted, plot_to_log
 
 # TODO re-make some of these classes as ABCs
 # It would make intent explicit, since they are sub-classed
@@ -42,7 +39,7 @@ class ScanGroup:
 
     precursor_mzs: list[NDArray]
     precursor_intensities: list[NDArray]
-    precursor_rts: NDArray
+    precursor_retention_times: NDArray
 
     def __post_init__(self) -> None:
         """Check that all the arrays have the same length."""
@@ -71,8 +68,79 @@ class ScanGroup:
             self.base_peak_int,
             title=f"Base peak chromatogram for the Group in {self.iso_window_name}",
         )
+        for x in self.mzs:
+            if not is_sorted(x):
+                raise ValueError("m/z arrays are not sorted is ScanGroup")
 
-    def as_dataframe(self) -> pd.DataFrame:
+    @property
+    def cache_file_stem(self) -> str:
+        stem = "".join(x if x.isalnum() else "_" for x in self.iso_window_name)
+        return stem
+
+    def to_cache(self, dir: Path) -> None:
+        """Saves the group to a cache file."""
+        Path(dir).mkdir(parents=True, exist_ok=True)
+        fragment_df = self.as_dataframe()
+        precursor_df = self.precursor_dataframe()
+
+        stem = self.cache_file_stem
+
+        precursor_df.write_parquet(dir / f"{stem}_precursors.parquet")
+        fragment_df.write_parquet(dir / f"{stem}_fragments.parquet")
+
+    @classmethod
+    def _elems_from_fragment_cache(cls, file):
+        fragment_data = pl.read_parquet(file).to_dict()
+        precursor_range = (
+            fragment_data.pop("precursor_start")[0],
+            fragment_data.pop("precursor_end")[0],
+        )
+        ind_max_int = [np.argmax(x) for x in fragment_data["intensities"]]
+        base_peak_mz = np.array(
+            [x[i] for x, i in zip(fragment_data["mzs"], ind_max_int)],
+        )
+        base_peak_int = np.array(
+            [x[i] for x, i in zip(fragment_data["intensities"], ind_max_int)],
+        )
+
+        out = {
+            "precursor_range": precursor_range,
+            "mzs": fragment_data["mzs"],
+            "intensities": fragment_data["intensities"],
+            "base_peak_mz": base_peak_mz,
+            "base_peak_int": base_peak_int,
+            "retention_times": fragment_data["retention_times"],
+            "scan_ids": fragment_data["scan_ids"],
+        }
+
+        return out, fragment_data
+
+    def _precursor_elems_from_cache(self, file):
+        precursor_data = pl.read_parquet(file).to_dict()
+        out = {
+            "precursor_mzs": precursor_data["precursor_mzs"],
+            "precursor_intensities": precursor_data["precursor_intensities"],
+            "precursor_retention_times": precursor_data["precursor_retention_times"],
+        }
+        return out, precursor_data
+
+    @classmethod
+    def from_cache(cls, dir: Path, name: str) -> ScanGroup:
+        """Loads a group from a cache file."""
+        raise ValueError("Why am I here??")
+        fragment_elems, _fragment_data = cls._elems_from_fragment_cache(
+            dir / f"{name}_fragments.parquet",
+        )
+        precursor_elems, _fragment_data = cls._precursor_elems_from_cache(
+            dir / f"{name}_precursors.parquet",
+        )
+        return cls(
+            iso_window_name=name,
+            **precursor_elems,
+            **fragment_elems,
+        )
+
+    def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -82,15 +150,35 @@ class ScanGroup:
         - precursor_start: start of the precursor range
         - precursor_end: end of the precursor range
         """
-        out = pd.DataFrame(
+        out = pl.DataFrame(
             {
                 "mzs": self.mzs,
                 "intensities": self.intensities,
-                "rts": self.retention_times,
+                "retention_times": self.retention_times,
+                "scan_ids": self.scan_ids,
             },
         )
         out["precursor_start"] = min(self.precursor_range)
         out["precursor_end"] = max(self.precursor_range)
+        return out
+
+    def precursor_dataframe(self) -> pl.DataFrame:
+        """Returns a dataframe with the metadata for the group.
+
+        The dataframe has the following columns:
+        - precursor_mzs: list of precursor mzs for each spectrum
+        - precursor_intensities: list of precursor intensities for each spectrum
+        - precursor_retention_times: precursor retention times for each spectrum
+        - precursor_start: start of the precursor range
+        - precursor_end: end of the precursor range
+        """
+        out = pl.DataFrame(
+            {
+                "precursor_mzs": self.precursor_mzs,
+                "precursor_intensities": self.precursor_intensities,
+                "precursor_retention_times": self.precursor_retention_times,
+            },
+        )
         return out
 
     def get_highest_window(
@@ -232,7 +320,7 @@ class ScanGroup:
             each of which is the for the values integrated for the
             intensity values.
         """
-        index = np.searchsorted(self.precursor_rts, rt)
+        index = np.searchsorted(self.precursor_retention_times, rt)
         slc, center_index = slice_from_center(
             index,
             window=11,
@@ -314,6 +402,7 @@ class StackedChromatograms:
     base_peak_intensity: float
     stack_peak_indices: list[list[int]] | list[NDArray[np.int32]]
     center_intensities: NDArray[np.float32]
+    correlations: NDArray
 
     def __post_init__(self) -> None:
         """Checks that the dimensions of the arrays are correct.
@@ -366,13 +455,14 @@ class StackedChromatograms:
         above_hm = rt >= (rt.max() / 2)
         return above_hm.astype(int).sum()
 
-    def plot(self, plt) -> None:  # noqa
+    def plot(self, plt, matches=None) -> None:  # noqa
         """Plots the stacked chromatogram as lines."""
         # TODO reconsider this implementation, maybe lazy import
         # of matplotlib.
-        plt.plot(self.array.T)
-        plt.plot(self.array[self.ref_index, ...].T, color="black")
-        plt.show()
+        plt.plot(self.array.T, color="gray", alpha=0.5, linewidth=0.5)
+        plt.plot(self.array[self.ref_index, ...].T, color="black", linewidth=2)
+        if matches is not None:
+            plt.plot(self.array[matches, ...].T, color="magenta")
 
     def trace_correlation(self) -> NDArray[np.float32]:
         """Calculate the correlation between the reference trace and all other traces.
@@ -478,11 +568,14 @@ class StackedChromatograms:
 
             max_peak_corr = np.sort(corrs)[-max_peaks] if len(corrs) > max_peaks else -1
             keep = corrs >= max(min_correlation, max_peak_corr)
+            keep_corrs = corrs[keep]
 
             stacked_arr = stacked_arr[..., keep, ::1]
             center_mzs = center_mzs[keep]
             center_intensities = center_intensities[keep]
             indices = [[y for y, k in zip(x, keep) if k] for x in indices]
+        else:
+            keep_corrs = np.array([1.0])
 
         ref_id = np.argmax(stacked_arr[..., center_index])
         bp_int = stacked_arr[ref_id, center_index]
@@ -495,6 +588,7 @@ class StackedChromatograms:
             base_peak_intensity=bp_int,
             stack_peak_indices=indices,
             center_intensities=center_intensities,
+            correlations=keep_corrs,
         )
         return out
 
@@ -513,245 +607,167 @@ class SpectrumStacker:
             The configuration object. Note that this is an DiademConfig
             configuration object.
         """
-        self.adapter = MZMLAdapter(mzml_file, config=config)
-
-        # TODO check if directly reading the xml is faster ...
-        # also evaluate if that is needed
-        scaninfo = self.adapter.get_scan_info()
-        ms1_scaninfo = scaninfo[scaninfo.ms_level <= 1]
         self.config = config
-        if "DEBUG_DIADEM" in os.environ:
-            logger.error("RUNNING DIADEM IN DEBUG MODE (only 700-710 mz iso windows)")
-            scaninfo = scaninfo[scaninfo.ms_level > 1]
-            scaninfo = scaninfo[
-                [x[0] > 700 and x[0] < 705 for x in scaninfo.iso_window]
-            ]
-        self.ms1info = ms1_scaninfo
-        self.ms2info = scaninfo[scaninfo.ms_level > 1].copy().reset_index()
-        self.unique_iso_windows = set(np.array(self.ms2info.iso_window))
+        self.cache_location = Path(mzml_file).with_suffix(".parquet")
+        if self.cache_location.exists():
+            logger.info(f"Found cache file at {self.cache_location}")
+        else:
+            df = get_mzml_data(mzml_file, min_peaks=15)
+            df.write_parquet(self.cache_location)
+            del df
 
-    def _preprocess_scangroup(
-        self,
-        name: str,
-        df_chunk: DataFrame,
-        mz_range: None | tuple[float, float] = None,
-        progress: bool = True,
-    ) -> tuple[NDArray, ...]:
-        logger.debug(f"Processing iso window {name}")
-
-        window_mzs = []
-        window_ints = []
-        window_bp_mz = []
-        window_bp_int = []
-        window_rtinsecs = []
-        window_scanids = []
-
-        npeaks_raw = []
-        npeaks_deisotope = []
-
-        for row in tqdm(
-            df_chunk.itertuples(),
-            desc=f"Preprocessing spectra for {name}",
-            disable=not progress,
-        ):
-            spec_id = row.spec_id
-            curr_spec: Spectrum = self.adapter[spec_id]
-            # NOTE instrument seems to have a wrong value ...
-            # Also activation seems to not be recorded ...
-            curr_spec = curr_spec.filter_top(self.config.run_max_peaks_per_spec)
-            curr_spec = curr_spec.filter_mz_range(*self.config.ion_mz_range)
-
-            mzs = curr_spec.mz
-            intensities = curr_spec.intensity
-
-            if mz_range is not None:
-                mz_filter = slice(
-                    np.searchsorted(mzs, mz_range[0]),
-                    np.searchsorted(mzs, mz_range[1], "right"),
-                )
-                mzs = mzs[mz_filter]
-                intensities = intensities[mz_filter]
-
-            # Deisotoping!
-            if self.config.run_deconvolute_spectra:
-                # Masses need to be ordered for the deisotoping function!
-                order = np.argsort(curr_spec.mz)
-                npeaks_raw.append(len(order))
-
-                mzs = curr_spec.mz[order]
-                intensities = curr_spec.intensity[order]
-                if len(mzs) > 0:
-                    mzs, intensities = deisotope(
-                        mzs,
-                        intensities,
-                        max_charge=5,
-                        diff=self.config.g_tolerances[1],
-                        unit=self.config.g_tolerance_units[1],
-                    )
-                npeaks_deisotope.append(len(mzs))
-
-            # TODO evaluate this scaling
-            intensities = np.sqrt(intensities)
-            if len(mzs) == 0:
-                mzs, intensities = np.array([0]), np.array([0])
-
-            bp_index = np.argmax(intensities)
-            bp_mz = mzs[bp_index]
-            bp_int = intensities[bp_index]
-            rtinsecs = curr_spec.retention_time.seconds()
-
-            window_mzs.append(mzs)
-            window_ints.append(intensities)
-            window_bp_mz.append(bp_mz)
-            window_bp_int.append(bp_int)
-            window_rtinsecs.append(rtinsecs)
-            window_scanids.append(spec_id)
-
-        window_bp_mz = np.array(window_bp_mz).astype(np.float32)
-        window_bp_int = np.array(window_bp_int).astype(np.float32)
-        window_rtinsecs = np.array(window_rtinsecs).astype(np.float16)
-        check_sorted(window_rtinsecs)
-        window_scanids = np.array(window_scanids, dtype="object")
-
-        avg_peaks_raw = np.array(npeaks_raw).mean()
-        avg_peaks_deisotope = np.array(npeaks_deisotope).mean()
-        # Create datasets within each group
-        logger.info(f"Saving group {name} with length {len(window_mzs)}")
-        logger.info(
-            (
-                f"{avg_peaks_raw} peaks/spec; {avg_peaks_deisotope} peaks/spec after"
-                " deisotoping"
-            ),
+        unique_windows = (
+            pl.scan_parquet(self.cache_location)
+            .select(pl.col(["quad_low_mz_values", "quad_high_mz_values"]))
+            .filter(pl.col("quad_low_mz_values") > 0)
+            .sort("quad_low_mz_values")
+            .unique()
+            .collect()
         )
 
-        out = [
-            window_mzs,
-            window_ints,
-            window_bp_mz,
-            window_bp_int,
-            window_rtinsecs,
-            window_scanids,
-        ]
+        if "DEBUG_DIADEM" in os.environ:
+            logger.error("RUNNING DIADEM IN DEBUG MODE (only the 4th precursor index)")
+            self.unique_precursor_windows = unique_windows[3:4].rows(named=True)
+        else:
+            self.unique_precursor_windows = unique_windows.rows(named=True)
+
+    @contextmanager
+    def lazy_datafile(self) -> pl.LazyFrame:
+        """Scans the cached version of the data and yields it as a context manager."""
+        yield pl.scan_parquet(self.cache_location)
+
+    def _precursor_iso_window_elements(
+        self,
+        precursor_window: dict[str, float],
+        mz_range: None | tuple[float, float] = None,
+    ) -> dict[str : dict[str:NDArray]]:
+        # TODO make this a more generic function
+        # this is pretty much the same for timstof data but
+        # with ims values...
+        with self.lazy_datafile() as datafile:
+            datafile: pl.LazyFrame
+            promise = (
+                pl.col("quad_low_mz_values") == precursor_window["quad_low_mz_values"]
+            ) & (
+                pl.col("quad_high_mz_values") == precursor_window["quad_high_mz_values"]
+            )
+            ms_data = datafile.filter(promise).sort("rt_values")
+
+            if mz_range is not None:
+                nested_cols = [
+                    "mz_values",
+                    "corrected_intensity_values",
+                ]
+                non_nested_cols = [
+                    x for x in ms_data.head().collect().columns if x not in nested_cols
+                ]
+                ms_data = (
+                    ms_data.explode(nested_cols)
+                    .filter(pl.col("mz_values").is_between(mz_range[0], mz_range[1]))
+                    .groupby(pl.col(non_nested_cols))
+                    .agg(nested_cols)
+                    .sort("rt_values")
+                )
+
+            ms_data = ms_data.collect()
+
+            bp_indices = [np.argmax(x) for x in ms_data["corrected_intensity_values"]]
+            bp_ints = [
+                x1.to_numpy()[x2]
+                for x1, x2 in zip(ms_data["corrected_intensity_values"], bp_indices)
+            ]
+            bp_ints = np.array(bp_ints)
+            bp_mz = [
+                x1.to_numpy()[x2] for x1, x2 in zip(ms_data["mz_values"], bp_indices)
+            ]
+            bp_mz = np.array(bp_mz)
+            bp_indices = np.array(bp_indices)
+            rts = ms_data["rt_values"].to_numpy(zero_copy_only=True)
+            assert is_sorted(rts)
+
+            quad_high = ms_data["quad_high_mz_values"][0]
+            quad_low = ms_data["quad_low_mz_values"][0]
+            window_name = str(quad_low) + "_" + str(quad_high)
+
+            template = window_name + "_{}"
+            scan_indices = [template.format(i) for i in range(len(rts))]
+
+            x = {
+                "precursor_range": (quad_low, quad_high),
+                "base_peak_int": bp_ints,
+                "base_peak_mz": bp_mz,
+                "iso_window_name": window_name,
+                "retention_times": rts,
+                "scan_ids": scan_indices,
+            }
+            orders = [np.argsort(x.to_numpy()) for x in ms_data["mz_values"]]
+
+            x.update(
+                {
+                    "mzs": [
+                        x.to_numpy()[o] for x, o in zip(ms_data["mz_values"], orders)
+                    ],
+                    "intensities": [
+                        x.to_numpy()[o]
+                        for x, o in zip(ms_data["corrected_intensity_values"], orders)
+                    ],
+                },
+            )
+
+        return x
+
+    def _precursor_iso_window_groups(
+        self,
+        precursor_window: dict[str, float],
+    ) -> dict[str:ScanGroup]:
+        elems = self._precursor_iso_window_elements(precursor_window)
+        prec_info = self._precursor_iso_window_elements(
+            {"quad_low_mz_values": -1, "quad_high_mz_values": -1},
+            mz_range=list(precursor_window.values()),
+        )
+
+        assert is_sorted(prec_info["retention_times"])
+
+        out = ScanGroup(
+            precursor_mzs=prec_info["mzs"],
+            precursor_intensities=prec_info["intensities"],
+            precursor_retention_times=prec_info["retention_times"],
+            **elems,
+        )
         return out
 
-    def _get_iso_window_group(
-        self,
-        iso_window_name: str,
-        iso_window: tuple[float, float],
-        ms2_chunk: DataFrame,
-        ms1_chunk: DataFrame,
-    ) -> ScanGroup:
-        """Gets all spectra that share the same window.
-
-        Gets all spectra that share the same iso window
-        and creates a ScanGroup for them.
-
-        Meant for internal usage.
+    def get_iso_window_groups(self, workerpool: None | Parallel) -> list[ScanGroup]:
+        """Get scan groups for each unique isolation window.
 
         Parameters
         ----------
-        iso_window_name : str
-            Name of the isolation window.
-        iso_window : tuple[float, float]
-            Isolation window.
-        ms2_chunk : DataFrame
-            DataFrame containing all MS2 spectra.
-        ms1_chunk : DataFrame
-            DataFrame containing all MS1 spectra.
+        workerpool : None | Parallel
+            If None, the function will be run in serial mode.
+            If Parallel, the function will be run in parallel mode.
+            The Parallel is created using joblib.Parallel.
+
+        Returns
+        -------
+        list[ScanGroup]
+            A list of ScanGroup objects.
+            Each of them corresponding to an unique isolation window from
+            the quadrupole.
         """
-        (
-            window_mzs,
-            window_ints,
-            window_bp_mz,
-            window_bp_int,
-            window_rtinsecs,
-            window_scanids,
-        ) = self._preprocess_scangroup(
-            name=iso_window_name,
-            df_chunk=ms2_chunk,
-            mz_range=None,
-        )
-
-        (
-            prec_mzs,
-            prec_ints,
-            _,
-            _,
-            prec_rtinsecs,
-            _,
-        ) = self._preprocess_scangroup(
-            name="precursors " + iso_window_name,
-            df_chunk=ms1_chunk,
-            mz_range=iso_window,
-        )
-
-        group = ScanGroup(
-            iso_window_name=iso_window_name,
-            precursor_range=iso_window,
-            mzs=window_mzs,
-            intensities=window_ints,
-            base_peak_mz=window_bp_mz,
-            base_peak_int=window_bp_int,
-            retention_times=window_rtinsecs,
-            scan_ids=window_scanids,
-            precursor_intensities=prec_ints,
-            precursor_mzs=prec_mzs,
-            precursor_rts=prec_rtinsecs,
-        )
-        return group
-
-    def get_iso_window_groups(
-        self,
-        workerpool: None | Parallel = None,
-    ) -> list[ScanGroup]:
-        """Returns a list of all ScanGroups in an mzML file."""
-        grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
-        iso_windows, chunks = zip(*list(grouped))
-        precursor_info = self.ms1info
-
-        iso_window_names = [
-            "({:.06f}, {:.06f})".format(*iso_window) for iso_window in iso_windows
-        ]
-
         if workerpool is None:
             results = [
-                self._get_iso_window_group(
-                    iso_window_name=iwn,
-                    iso_window=iw,
-                    ms2_chunk=chunk,
-                    ms1_chunk=precursor_info,
-                )
-                for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
+                self._precursor_iso_window_groups(i)
+                for i in self.unique_precursor_windows
             ]
         else:
             results = workerpool(
-                delayed(self._get_iso_window_group)(
-                    iso_window_name=iwn,
-                    iso_window=iw,
-                    ms2_chunk=chunk,
-                    ms1_chunk=precursor_info,
-                )
-                for iwn, iw, chunk in zip(iso_window_names, iso_windows, chunks)
+                delayed(self._precursor_iso_window_groups)(i)
+                for i in self.unique_precursor_windows
             )
 
         return results
 
-    def yield_iso_window_groups(self, progress: bool = False) -> Iterator[ScanGroup]:
+    def yield_iso_window_groups(self) -> Iterator[ScanGroup]:
         """Yield scan groups for each unique isolation window."""
-        grouped = self.ms2info.sort_values("RTinSeconds").groupby("iso_window")
-        precursor_info = self.ms1info
-
-        for iso_window, chunk in tqdm(
-            grouped,
-            disable=not progress,
-            desc="Unique Isolation Windows",
-        ):
-            iso_window_name = "({:.06f}, {:.06f})".format(*iso_window)
-
-            group = self._get_iso_window_group(
-                iso_window_name=iso_window_name,
-                iso_window=iso_window,
-                ms2_chunk=chunk,
-                ms1_chunk=precursor_info,
-            )
-            yield group
+        for i in self.unique_precursor_windows:
+            results = self._precursor_iso_window_groups(i)
+            yield results

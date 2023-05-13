@@ -64,7 +64,7 @@ def _make_score_dict(ions: str) -> dict[str, dict[str, float | list[float]]]:
 
 SeqProperties = namedtuple(
     "SeqProperties",
-    "fragments, ion_series, prec_mz, proforma_seq, num_frags",
+    "fragments, fragment_positions, ion_series, prec_mz, proforma_seq, num_frags",
 )
 
 
@@ -409,6 +409,7 @@ class IndexedDb:
             frag_to_prec_ids=frags_df["seq_id"].values,
             prec_mzs=seqs_df["seq_mz"].values,
             prec_seqs=seqs_df["seq_proforma"].values,
+            frag_positions=frags_df["ion_position"].values,
         )
 
     # @profile
@@ -447,6 +448,7 @@ class IndexedDb:
         frag_chunk = {
             "mz": [],
             "ion_series": [],
+            "ion_position": [],
             "seq_id": [],
             "precursor_mz": [],
         }
@@ -454,23 +456,34 @@ class IndexedDb:
         append = False
         if seq_file_path.exists():
             append = True
-        for seq_id, (frag_mzs, ion_series, prec_mzs, prec_seqs, num_frags) in enumerate(
+
+        my_iter = enumerate(
             (self.seq_properties(x) for x in iter_seqs),
             start=start_id,
-        ):
+        )
+        for seq_id, (
+            frag_mzs,
+            ion_positions,
+            ion_series,
+            prec_mzs,
+            prec_seqs,
+            num_frags,
+        ) in my_iter:
             seq_chunk["seq_id"].append(seq_id)
             seq_chunk["seq_mz"].append(prec_mzs)
             seq_chunk["seq_proforma"].append(prec_seqs)
             seq_chunk["decoy"].append(decoy)
 
-            for w, x, y, z in zip(
+            for w, x, x2, y, z in zip(
                 [prec_mzs] * num_frags,
                 frag_mzs,
+                ion_positions,
                 ion_series,
                 [seq_id] * num_frags,
             ):
                 frag_chunk["precursor_mz"].append(float(w))
                 frag_chunk["mz"].append(float(x))
+                frag_chunk["ion_position"].append(x2)
                 frag_chunk["ion_series"].append(y)
                 frag_chunk["seq_id"].append(z)
 
@@ -528,7 +541,7 @@ class IndexedDb:
                 miniters=one_pct,
             )
 
-            frag_mzs, frag_series, prec_mzs, prec_seqs, num_frags = zip(
+            frag_mzs, frag_position, frag_series, prec_mzs, prec_seqs, num_frags = zip(
                 *(self.seq_properties(x) for x in iter_seqs),
             )
 
@@ -536,6 +549,7 @@ class IndexedDb:
             prec_mzs = np.array(prec_mzs, dtype="float32")
             prec_seqs = np.array(prec_seqs, dtype="object")
             frag_mzs = np.concatenate(list(frag_mzs)).astype("float32")
+            frag_position = np.concatenate(list(frag_position)).astype("int8")
             frag_series = np.concatenate(list(frag_series))
             seq_ids = np.empty_like(frag_mzs, dtype=int)
 
@@ -556,12 +570,14 @@ class IndexedDb:
             frag_to_prec_ids=seq_ids,
             prec_mzs=prec_mzs,
             prec_seqs=prec_seqs,
+            frag_positions=frag_position,
         )
 
     def index_from_arrays(
         self,
         frag_mzs: NDArray[np.float32],
         frag_series: NDArray[np.str],
+        frag_positions: NDArray[np.int8],
         frag_to_prec_ids: NDArray[np.int64],
         prec_mzs: NDArray[np.float32],
         prec_seqs: NDArray[np.str],
@@ -575,6 +591,9 @@ class IndexedDb:
             An array of fragment m/z values.
         frag_series : NDArray[np.str]
             An array of fragment ion series.
+        frag_series : NDArray[np.int8]
+            An array of the positions of the fragment ions.
+            (for example 1 for b1, 2 for b2, 3 for b3, etc.)
         frag_to_prec_ids : NDArray[np.int64]
             An array of sequence ids. (unique identifier of a peptide sequence)
         prec_mzs : NDArray[np.float32]
@@ -600,11 +619,15 @@ class IndexedDb:
                     " to be the same."
                 ),
             )
-        if not all(len(frag_mzs) == len(x) for x in [frag_series, frag_to_prec_ids]):
+        if not all(
+            len(frag_mzs) == len(x)
+            for x in [frag_series, frag_to_prec_ids, frag_positions]
+        ):
             raise ValueError(
                 (
-                    "The length of the frag_mz, frag_series and frag_to_prec_ids need"
-                    " to be the same"
+                    f"The length of the frag_mz {len(frag_mzs)}, frag_series"
+                    f" {len(frag_series)} and frag_to_prec_ids {len(frag_to_prec_ids)},"
+                    f" frag_positions {len(frag_positions)} need to be the same"
                 ),
             )
         if not len(prec_seqs) == len(np.unique(prec_seqs)):
@@ -616,27 +639,35 @@ class IndexedDb:
                 f"Sorting by ms2 mz. {frag_mzs.size} total fragments (if needed)",
             )
             if not is_sorted(frag_mzs):
-                sorted_frags, sorted_frag_series, sorted_seq_ids = sort_all(
-                    frag_mzs,
-                    frag_series,
-                    frag_to_prec_ids,
+                sorted_frags, sorted_frag_series, sorted_seq_ids, frag_positions = (
+                    sort_all(
+                        frag_mzs,
+                        frag_series,
+                        frag_to_prec_ids,
+                        frag_positions,
+                    )
                 )
                 logger.debug("Done sorting (and GC), generating bucketlists")
             else:
-                logger.debug("Skippping sortinb because it is already sorted.")
-                sorted_frags, sorted_frag_series, sorted_seq_ids = (
+                logger.debug("Skippping sorting because it is already sorted.")
+                sorted_frags, sorted_frag_series, sorted_seq_ids, frag_positions = (
                     frag_mzs,
                     frag_series,
                     frag_to_prec_ids,
+                    frag_positions,
                 )
 
             del frag_mzs, frag_to_prec_ids, frag_series
 
+        # Temporary location for this, will be moved if it seems to give better results
+        # TODO
+        MIN_POSITION = 3
+
         self.bucketlist = FragmentBucketList.from_arrays(
-            fragment_mzs=sorted_frags,
-            fragment_series=sorted_frag_series,
-            precursor_ids=sorted_seq_ids,
-            precursor_mzs=prec_mzs[sorted_seq_ids],
+            fragment_mzs=sorted_frags[frag_positions >= MIN_POSITION],
+            fragment_series=sorted_frag_series[frag_positions >= MIN_POSITION],
+            precursor_ids=sorted_seq_ids[frag_positions >= MIN_POSITION],
+            precursor_mzs=prec_mzs[sorted_seq_ids[frag_positions >= MIN_POSITION]],
             chunksize=self.chunksize,
             sorting_level="ms2",
             been_sorted=True,
@@ -652,22 +683,38 @@ class IndexedDb:
     # @profile
     def seq_properties(self, x: Peptide) -> SeqProperties:
         """Internal method that extracts the peptide properties to build the index."""
-        masses = {
-            k: np.concatenate(
-                [x.ion_series(ion_type=k, charge=c) for c in x.config.ion_charges],
-            )
-            for k in x.config.ion_series
-        }
+        masses = {}
+        ion_positions = []
+        for k in x.config.ion_series:
+            ions = []
+            positions = []
+            for c in x.config.ion_charges:
+                curr_ions = x.ion_series(ion_type=k, charge=c)
+                curr_pos = np.arange(len(curr_ions)) + 1
+                ions.append(curr_ions)
+                positions.append(curr_pos)
+
+            ion_positions.extend(positions)
+            masses[k] = np.concatenate(ions)
 
         ion_series = np.concatenate(
             [np.full_like(v, k, dtype=str) for k, v in masses.items()],
         )
         masses = np.concatenate(list(masses.values()))
+        positions = np.concatenate(ion_positions)
         # TODO move this to the config ...
         mass_mask = (masses > 150) * (masses < 2000)
         masses = masses[mass_mask]
         ion_series = ion_series[mass_mask]
-        out = SeqProperties(masses, ion_series, x.mz, x.to_proforma(), len(masses))
+        positions = positions[mass_mask]
+        out = SeqProperties(
+            masses,
+            positions,
+            ion_series,
+            x.mz,
+            x.to_proforma(),
+            len(masses),
+        )
         return out
 
     # @profile
@@ -830,7 +877,9 @@ class IndexedDb:
             return None
 
         scores["Score"] = (
-            scores["log_factorial_peak_sum"] + scores["log_intensity_sums"]
+            scores["log_factorial_peak_sum"]
+            + scores["log_intensity_sums"]
+            # scores["log_intensity_sums"]
         )
         # Calculate requirements for the z score among all other proposed scores!
         score_mean = scores["Score"].mean()

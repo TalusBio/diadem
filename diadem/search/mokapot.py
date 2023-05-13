@@ -5,6 +5,7 @@ from os import PathLike
 from pathlib import Path
 
 import mokapot
+import numpy as np
 import pandas as pd
 
 from diadem.config import DiademConfig
@@ -37,13 +38,18 @@ def brew_run(
     """
     input_df = _prepare_df(results, fasta_path, ms_data_path)
     nonfeat = [
+        "id",
         "peptide",
         "proteins",
         "filename",
         "target_pair",
         "peak_id",
         "is_target",
+        "PrecursorMZ",
+        "RetentionTime",
     ]
+    # Retention time could be used if we had a model that makes use of the
+    # combination of RT/MZ and IMS. Since an SVM doesn't, we'll drop it.
     peptides = mokapot.LinearPsmDataset(
         psms=input_df,
         target_column="is_target",
@@ -56,13 +62,13 @@ def brew_run(
     )
 
     mokapot.PercolatorModel(train_fdr=config.train_fdr)
-    results = mokapot.brew(peptides, test_fdr=config.eval_fdr)
+    results, _ = mokapot.brew(peptides, test_fdr=config.eval_fdr)
     targets = results.confidence_estimates["peptides"]
     decoys = results.decoy_confidence_estiamtes["peptides"]
     targets["is_target"] = True
     decoys["is_target"] = False
     return pd.concat([targets, decoys], axis=1)
-
+  
 
 def _prepare_df(
     results: pd.DataFrame,
@@ -90,6 +96,10 @@ def _prepare_df(
 
     # Remove all list columns
     non_list_cols = [c for c in results.columns if not isinstance(results[c][0], list)]
+    non_list_cols = [
+        c for c in non_list_cols if not isinstance(results[c][0], np.ndarray)
+    ]
+
     results = results.loc[:, non_list_cols].drop(columns="rank")
 
     results["filename"] = Path(ms_data_path).stem

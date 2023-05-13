@@ -4,18 +4,17 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import chain
 from os import PathLike
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
-import pandas as pd
-from alphatims.bruker import TimsTOF
+import polars as pl
 from joblib import Parallel, delayed
 from loguru import logger
 from ms2ml.utils.mz_utils import get_tolerance
+from msflattener.bruker import get_timstof_data
 from numpy.typing import NDArray
-from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
 from diadem.data_io.mzml import (
@@ -25,15 +24,11 @@ from diadem.data_io.mzml import (
     StackedChromatograms,
 )
 from diadem.data_io.utils import slice_from_center, xic
-from diadem.deisotoping import deisotope_with_ims
 from diadem.search.metrics import get_ref_trace_corrs
-from diadem.utilities.neighborhood import multidim_neighbor_search
 from diadem.utilities.utils import is_sorted
 
 if "PLOTDIADEM" in os.environ:
-    import random  # noqa: I001
-
-    from matplotlib import pyplot as plt
+    pass
 
 IMSError = Literal["abs", "pct"]
 
@@ -225,11 +220,14 @@ class TimsStackedChromatograms(StackedChromatograms):
 
             max_peak_corr = np.sort(corrs)[-max_peaks] if len(corrs) > max_peaks else -1
             keep = corrs >= max(min_correlation, max_peak_corr)
+            keep_corrs = corrs[keep]
 
             stacked_arr = stacked_arr[..., keep, ::1]
             u_center_mzs = u_center_mzs[keep]
             u_center_intensities = u_center_intensities[keep]
             indices = [[y for y, k in zip(x, keep) if k] for x in indices]
+        else:
+            keep_corrs = np.array([1.0])
 
         ref_id = np.argmax(stacked_arr[..., center_index])
         bp_int = stacked_arr[ref_id, center_index]
@@ -244,6 +242,7 @@ class TimsStackedChromatograms(StackedChromatograms):
             stack_peak_indices=indices,
             center_intensities=u_center_intensities,
             ref_ims=bp_ims,
+            correlations=keep_corrs,
         )
         return out
 
@@ -294,7 +293,23 @@ class TimsScanGroup(ScanGroup):
         if len(self.imss) != len(self.mzs):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
-    def as_dataframe(self) -> pd.DataFrame:
+    @classmethod
+    def _elems_from_fragment_cache(cls, file):
+        elems, data = super()._elems_from_fragment_cache(file)
+        elems["imss"] = data["imss"]
+        return elems, data
+
+    @classmethod
+    def _precursor_elems_from_cache(cls, file):
+        elems, data = super()._precursor_elems_from_cache(file)
+        elems["imss"] = data["imss"]
+        return elems, data
+
+    def to_cache(self, Path):
+        """Saves the group to a cache file."""
+        super().to_cache(Path)
+
+    def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
 
         The dataframe has the following columns:
@@ -308,6 +323,13 @@ class TimsScanGroup(ScanGroup):
         out = super().as_dataframe()
         out["ims"] = self.imss
         return out
+
+    def precursor_dataframe(self) -> pl.DataFrame:
+        df = super().precursor_dataframe()
+        df = df.with_columns(
+            pl.Series(name="precursor_imss", values=self.precursor_imss),
+        )
+        return df
 
     def get_highest_window(
         self,
@@ -372,8 +394,8 @@ class TimsScanGroup(ScanGroup):
             self.base_peak_int[i] = np.max(self.intensities[i])
             self.base_peak_mz[i] = self.mzs[i][np.argmax(self.intensities[i])]
         else:
-            self.base_peak_int[i] = -1
-            self.base_peak_mz[i] = -1
+            self.base_peak_int[i] = 0
+            self.base_peak_mz[i] = 0
 
     def __len__(self) -> int:
         """Returns the number of spectra in the group."""
@@ -395,138 +417,139 @@ class TimsSpectrumStacker(SpectrumStacker):
         """
         self.filepath = filepath
         self.config = config
-        with self.lazy_datafile() as datafile:
-            unique_precursor_indices = np.unique(datafile.precursor_indices)
-        unique_precursor_indices = [x for x in unique_precursor_indices if x != 0]
+        self.cache_location = Path(filepath).with_suffix(".centroided.parquet")
+        if self.cache_location.exists():
+            logger.info(f"Found cache file at {self.cache_location}")
+        else:
+            df = get_timstof_data(filepath, centroid=True)
+            df.write_parquet(self.cache_location)
+            del df
+
+        unique_windows = (
+            pl.scan_parquet(self.cache_location)
+            .select(pl.col(["quad_low_mz_values", "quad_high_mz_values"]))
+            .filter(pl.col("quad_low_mz_values") > 0)
+            .sort("quad_low_mz_values")
+            .unique()
+            .collect()
+        )
 
         if "DEBUG_DIADEM" in os.environ:
             logger.error("RUNNING DIADEM IN DEBUG MODE (only the 4th precursor index)")
-            self.unique_precursor_indices = unique_precursor_indices[3:4]
+            self.unique_precursor_windows = unique_windows[3:4].rows(named=True)
         else:
-            self.unique_precursor_indices = unique_precursor_indices
+            self.unique_precursor_windows = unique_windows.rows(named=True)
 
     @contextmanager
-    def lazy_datafile(self) -> TimsTOF:
-        """Reads the timstof data and yields it as context manager.
+    def lazy_datafile(self) -> pl.LazyFrame:
+        """Scans the cached version of the data and yields it as a context manager."""
+        yield pl.scan_parquet(self.cache_location)
 
-        This is right now a bandaid to prevent the full TimsTOF object
-        to be stored in memmory for the whole lifetime of this class.
-        """
-        _datafile = TimsTOF(self.filepath)
-        yield _datafile
-        del _datafile
-
+    # @profile
     def _precursor_iso_window_groups(
         self,
-        precursor_index: int,
-        progress: bool = True,
+        precursor_window: dict[str, float],
     ) -> dict[str:TimsScanGroup]:
-        elems = self._precursor_iso_window_elements(precursor_index, progress)
-        out = {}
-        for k, v in elems.items():
-            # Note: precursor id of 0 means inactive quadrupole
-            # and collision cell.
-            prec_info = self._precursor_iso_window_elements(
-                0,
-                progress=progress,
-                mz_range=v["precursor_range"],
-            )
-            assert len(list(prec_info)) == 1
-            prec_key = list(prec_info)[0]
-            prec_info = prec_info[prec_key]
-            inten_filter = prec_info["base_peak_int"] > 0
+        elems = self._precursor_iso_window_elements(precursor_window)
+        prec_info = self._precursor_iso_window_elements(
+            {"quad_low_mz_values": -1, "quad_high_mz_values": -1},
+            mz_range=list(precursor_window.values()),
+        )
 
-            precursor_mzs = [
-                k for i, k in enumerate(prec_info["mzs"]) if inten_filter[i]
-            ]
-            precursor_intensities = [
-                k for i, k in enumerate(prec_info["intensities"]) if inten_filter[i]
-            ]
-            precursor_imss = [
-                k for i, k in enumerate(prec_info["imss"]) if inten_filter[i]
-            ]
-            precursor_rts = prec_info["retention_times"][inten_filter]
+        assert is_sorted(prec_info["retention_times"])
 
-            assert is_sorted(precursor_rts)
-
-            out[k] = TimsScanGroup(
-                precursor_mzs=precursor_mzs,
-                precursor_intensities=precursor_intensities,
-                precursor_rts=precursor_rts,
-                precursor_imss=precursor_imss,
-                **v,
-            )
+        out = TimsScanGroup(
+            precursor_mzs=prec_info["mzs"],
+            precursor_intensities=prec_info["intensities"],
+            precursor_retention_times=prec_info["retention_times"],
+            precursor_imss=prec_info["imss"],
+            **elems,
+        )
         return out
 
+    # @profile
     def _precursor_iso_window_elements(
         self,
-        precursor_index: int,
-        progress: bool = True,
+        precursor_window: dict[str, float],
         mz_range: None | tuple[float, float] = None,
     ) -> dict[str : dict[str:NDArray]]:
         with self.lazy_datafile() as datafile:
-            index_win_dicts = _get_precursor_index_windows(
-                datafile,
-                precursor_index=precursor_index,
-                progress=progress,
-                mz_range=mz_range,
+            datafile: pl.LazyFrame
+            promise = (
+                pl.col("quad_low_mz_values") == precursor_window["quad_low_mz_values"]
+            ) & (
+                pl.col("quad_high_mz_values") == precursor_window["quad_high_mz_values"]
             )
-            out = {}
+            ms_data = datafile.filter(promise).sort("rt_values")
 
-            for k, v in index_win_dicts.items():
-                mzs = []
-                ints = []
-                imss = []
-
-                for vi in v:
-                    if len(vi["mz"]) > 0:
-                        new_order = np.argsort(vi["mz"])
-                        mzs.append(vi["mz"][new_order])
-                        ints.append(vi["intensity"][new_order])
-                        imss.append(vi["ims"][new_order])
-                    else:
-                        mzs.append(vi["mz"])
-                        ints.append(vi["intensity"])
-                        imss.append(vi["ims"])
-
-                # TODO change this to a data structure that stores
-                # this only once.
-                quad_low = list({x["quad_low_mz_values"] for x in v})
-                quad_high = list({x["quad_high_mz_values"] for x in v})
-                assert len(quad_high) == 1
-                assert len(quad_low) == 1
-
-                bp_indices = [np.argmax(x) if len(x) else None for x in ints]
-                bp_ints = [
-                    x1[x2] if x2 is not None else 0 for x1, x2 in zip(ints, bp_indices)
+            if mz_range is not None:
+                nested_cols = [
+                    "mz_values",
+                    "corrected_intensity_values",
+                    "mobility_values",
                 ]
-                bp_ints = np.array(bp_ints)
-                bp_mz = [
-                    x1[x2] if x2 is not None else -1 for x1, x2 in zip(mzs, bp_indices)
+                non_nested_cols = [
+                    x for x in ms_data.head().collect().columns if x not in nested_cols
                 ]
-                bp_mz = np.array(bp_mz)
-                bp_indices = np.array(bp_indices)
-                # bp_ims = np.array([x1[x2] for x1, x2 in zip(imss, bp_indices)])
-                rts = np.array([x["rt_values_min"] for x in v])
-                assert is_sorted(rts)
+                ms_data = (
+                    ms_data.explode(nested_cols)
+                    .filter(pl.col("mz_values").is_between(mz_range[0], mz_range[1]))
+                    .groupby(pl.col(non_nested_cols))
+                    .agg(nested_cols)
+                    .sort("rt_values")
+                )
 
-                scan_indices = [str(x["scan_indices"]) for x in v]
+            ms_data = ms_data.collect()
 
-                x = {
-                    "precursor_range": (quad_low[0], quad_high[0]),
-                    "mzs": mzs,
-                    "intensities": ints,
-                    "imss": imss,
-                    "base_peak_int": bp_ints,
-                    "base_peak_mz": bp_mz,
-                    # 'base_peak_ims':bp_ims,
-                    "iso_window_name": k,
-                    "retention_times": rts,
-                    "scan_ids": scan_indices,
-                }
-                out[k] = x
+            bp_indices = [np.argmax(x) for x in ms_data["corrected_intensity_values"]]
+            bp_ints = [
+                x1.to_numpy()[x2]
+                for x1, x2 in zip(ms_data["corrected_intensity_values"], bp_indices)
+            ]
+            bp_ints = np.array(bp_ints)
+            bp_mz = [
+                x1.to_numpy()[x2] for x1, x2 in zip(ms_data["mz_values"], bp_indices)
+            ]
+            bp_mz = np.array(bp_mz)
+            bp_indices = np.array(bp_indices)
+            rts = ms_data["rt_values"].to_numpy(zero_copy_only=True)
+            assert is_sorted(rts)
 
-        return out
+            quad_high = ms_data["quad_high_mz_values"][0]
+            quad_low = ms_data["quad_low_mz_values"][0]
+            window_name = str(quad_low) + "_" + str(quad_high)
+
+            template = window_name + "_{}"
+            scan_indices = [template.format(i) for i in range(len(rts))]
+
+            x = {
+                "precursor_range": (quad_low, quad_high),
+                "base_peak_int": bp_ints,
+                "base_peak_mz": bp_mz,
+                # 'base_peak_ims':bp_ims,
+                "iso_window_name": window_name,
+                "retention_times": rts,
+                "scan_ids": scan_indices,
+            }
+            orders = [np.argsort(x.to_numpy()) for x in ms_data["mz_values"]]
+
+            x.update(
+                {
+                    "mzs": [
+                        x.to_numpy()[o] for x, o in zip(ms_data["mz_values"], orders)
+                    ],
+                    "intensities": [
+                        x.to_numpy()[o]
+                        for x, o in zip(ms_data["corrected_intensity_values"], orders)
+                    ],
+                    "imss": [
+                        x.to_numpy()[o]
+                        for x, o in zip(ms_data["mobility_values"], orders)
+                    ],
+                },
+            )
+
+        return x
 
     def get_iso_window_groups(self, workerpool: None | Parallel) -> list[TimsScanGroup]:
         """Get scan groups for each unique isolation window.
@@ -545,33 +568,24 @@ class TimsSpectrumStacker(SpectrumStacker):
             Each of them corresponding to an unique isolation window from
             the quadrupole.
         """
-        results = []
-
         if workerpool is None:
-            nested_results = [
+            results = [
                 self._precursor_iso_window_groups(i)
-                for i in self.unique_precursor_indices
+                for i in self.unique_precursor_windows
             ]
         else:
-            nested_results = workerpool(
+            results = workerpool(
                 delayed(self._precursor_iso_window_groups)(i)
-                for i in self.unique_precursor_indices
+                for i in self.unique_precursor_windows
             )
-
-        for r in nested_results:
-            for rr in r.values():
-                results.append(rr)
 
         return results
 
-    def yield_iso_window_groups(self, progress: bool = True) -> Iterator[TimsScanGroup]:
+    def yield_iso_window_groups(self) -> Iterator[TimsScanGroup]:
         """Yield scan groups for each unique isolation window."""
-        for i in self.unique_precursor_indices:
-            nested_results = self._precursor_iso_window_groups(i, progress=progress)
-            for r in nested_results.values():
-                # TODO add here a the export of the cached windows
-                # maybe ... or just add a full interface to read this from cache...
-                yield r
+        for i in self.unique_precursor_windows:
+            results = self._precursor_iso_window_groups(i)
+            yield results
 
 
 # @profile
@@ -682,412 +696,3 @@ def get_break_indices(
     breaks[-1] += 1
 
     return breaks, break_indices
-
-
-# @profile
-def _get_precursor_index_windows(
-    dia_data: TimsTOF,
-    precursor_index: int,
-    progress: bool = True,
-    mz_range: None | tuple[float, float] = None,
-) -> dict[dict[list]]:
-    inds = dia_data[{"precursor_indices": precursor_index}, "raw"]
-
-    break_indices, break_values = get_break_indices(inds=inds)
-
-    # This will generate chunks of contiguous indices
-    # Which are fast to query.
-    # They do not assure that there will be only one quad window in
-    # them
-    pbar = tqdm(
-        zip(break_indices[:-1], break_indices[1:]),
-        total=len(break_indices),
-        disable=not progress,
-        desc=f"Collecting spectra for precursor={precursor_index}",
-        bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}",
-    )
-    quad_splits = {}
-    for startind, endind in pbar:
-        contig_peak_data = dia_data.convert_from_indices(
-            inds[startind:endind],
-            raw_indices_sorted=True,
-            return_mz_values=True,
-            return_corrected_intensity_values=True,
-            return_mobility_values=True,
-            return_rt_values_min=True,
-            # I think this is a better value than the actual RT
-            # since accounts for accumulation time.
-            return_quad_mz_values=True,
-            return_quad_indices=True,
-            # return_scan_indices=True,
-        )
-        # Scan indices are the same for the same rt-ims-quad combination
-        # so not very useful in our case.
-        # Since we want groups of peaks that share rt-quad values, regardless
-        # of the IMS value.
-
-        df_peak_data = pd.DataFrame(contig_peak_data)
-        grouping_vals = [
-            "quad_low_mz_values",
-            "quad_high_mz_values",
-            "rt_values_min",
-            "quad_indices",
-        ]
-        peak_data_vals = ["mz_values", "corrected_intensity_values", "mobility_values"]
-
-        g_inds, g_vals = get_break_indices(
-            df_peak_data["quad_indices"].array,
-            min_diff=0,
-        )
-
-        for si, ei in zip(g_inds[:-1], g_inds[1:]):
-            curr_peak_data = df_peak_data.iloc[si:ei]
-            assert all(
-                np.abs(np.max(curr_peak_data[x]) - np.min(curr_peak_data[x])) < 1e-3
-                for x in grouping_vals
-            )
-            current_chunk_data = {k: curr_peak_data[k].values[0] for k in grouping_vals}
-
-            current_chunk_data["scan_indices"] = current_chunk_data["quad_indices"]
-
-            peak_data = dict(
-                zip(peak_data_vals, curr_peak_data[peak_data_vals].T.values),
-            )
-
-            start_len = len(peak_data["mz_values"])
-
-            if not len(peak_data["mz_values"]):
-                starting_min_intensity = 0
-                starting_max_intensity = 0
-            else:
-                starting_min_intensity = np.min(peak_data["corrected_intensity_values"])
-                starting_max_intensity = np.max(peak_data["corrected_intensity_values"])
-
-            mz, intensity, ims = _preprocess_ims(
-                ims_values=peak_data["mobility_values"],
-                mz_values=peak_data["mz_values"],
-                intensity_values=peak_data["corrected_intensity_values"],
-                mz_range=mz_range,
-            )
-
-            d_out = {"mz": mz, "intensity": intensity, "ims": ims}
-            ## updating the progress bar
-            if not len(mz):
-                pct_compression = 0
-                final_len = 0
-                f_min = 0
-                f_max = 0
-            else:
-                pct_compression = round(100 * len(d_out["mz"]) / start_len)
-                final_len = len(d_out["mz"])
-                f_min = int(np.min(d_out["intensity"]))
-                f_max = int(np.max(d_out["intensity"]))
-                current_chunk_data.update(d_out)
-                quad_name = (
-                    f"{current_chunk_data['quad_low_mz_values']:.6f},"
-                    f" {current_chunk_data['quad_high_mz_values']:.6f}"
-                )
-                quad_splits.setdefault(quad_name, []).append(current_chunk_data)
-
-            postfix_dict = {
-                "peaks": start_len,
-                "f_peaks": final_len,
-                "pct": pct_compression,
-                "min": starting_min_intensity,
-                "max": starting_max_intensity,
-                "f_min": f_max,
-                "f_max": f_min,
-            }
-            postfix_dict = {k: f"{v:.1e}" for k, v in postfix_dict.items()}
-            pbar.set_postfix(
-                postfix_dict,
-                refresh=True,
-            )
-
-    return quad_splits
-
-
-# @profile
-def _preprocess_ims(
-    ims_values: NDArray[np.float32],
-    mz_values: NDArray[np.float32],
-    intensity_values: NDArray[np.float32],
-    mz_range: None | tuple[float, float] = None,
-) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
-    # TODO make all of these arguments
-    # or make this callable class.
-    PRELIM_N_PEAK_FILTER = 5_000  # noqa
-    FINAL_N_PEAK_FILTER = 1000  # noqa
-    MIN_INTENSITY_KEEP = 500  # noqa
-    MIN_NUM_SEEDS = 5_000  # noqa
-    IMS_TOL = 0.01  # noqa
-    # these tolerances are set narrow on purpose, since they
-    # only delimit the definition of the neighborhood, which will iteratively
-    # expanded.
-    MZ_TOL = 0.02  # noqa
-    MAX_ISOTOPE_CHARGE = 3  # noqa
-    if len(intensity_values) > PRELIM_N_PEAK_FILTER:
-        partition_indices = np.argpartition(
-            intensity_values,
-            -PRELIM_N_PEAK_FILTER,
-        )[-PRELIM_N_PEAK_FILTER:]
-
-        ims_values = ims_values[partition_indices]
-        mz_values = mz_values[partition_indices]
-        intensity_values = intensity_values[partition_indices]
-
-    sort_idx = np.argsort(mz_values)
-
-    ims_values = ims_values[sort_idx]
-    mz_values = mz_values[sort_idx]
-    intensity_values = intensity_values[sort_idx]
-
-    # Find highest peak, plot 4 mz and 0.3 IMS around it
-    if "PLOTDIADEM" in os.environ:
-        mz_range_val = 3
-        ims_range_val = 0.3
-        top_intense = np.argmax(intensity_values)
-        top_mz = mz_values[top_intense]
-        top_ims = ims_values[top_intense]
-        plot_mz_range = (top_mz - mz_range_val, top_mz + mz_range_val)
-        plot_ims_range = (top_ims - ims_range_val, top_ims + ims_range_val)
-
-        top_plot_filter = (
-            (mz_values > plot_mz_range[0])
-            & (mz_values < plot_mz_range[1])
-            & (ims_values > plot_ims_range[0])
-            & (ims_values < plot_ims_range[1])
-        )
-        o_plot_ims_values = ims_values[top_plot_filter]
-        o_plot_mz_values = mz_values[top_plot_filter]
-        o_plot_intensity_values = intensity_values[top_plot_filter]
-
-    if mz_range is not None:
-        mz_filter = slice(
-            np.searchsorted(mz_values, mz_range[0]),
-            np.searchsorted(mz_values, mz_range[1], "right"),
-        )
-        ims_values = ims_values[mz_filter]
-        mz_values = mz_values[mz_filter]
-        intensity_values = intensity_values[mz_filter]
-
-    # This is the bottleneck of the whole issue...
-    f = collapse_ims(
-        ims_values=ims_values,
-        mz_values=mz_values,
-        intensity_values=intensity_values,
-        top_n=MIN_NUM_SEEDS,
-        ims_tol=IMS_TOL,
-        mz_tol=MZ_TOL,
-    )
-    if len(f["mz"]) < 0:
-        new_order = np.argsort(f["mz"])
-        f = {k: v[new_order] for k, v in f.items()}
-
-    mz, intensity, ims = deisotope_with_ims(
-        ims_diff=IMS_TOL,
-        ims_unit="abs",
-        imss=f["ims"],
-        inten=f["intensity"],
-        mz=f["mz"],
-        mz_unit="da",
-        track_indices=False,
-        mz_diff=MZ_TOL,
-        max_charge=MAX_ISOTOPE_CHARGE,
-    )
-    intensity = np.array(intensity)
-
-    if len(mz) < 0:
-        filter = intensity > MIN_INTENSITY_KEEP
-        mz = mz[filter]
-        intensity = intensity[filter]
-        ims = ims[filter]
-
-    if "PLOTDIADEM" in os.environ:
-        top_plot_filter = (
-            (mz > plot_mz_range[0])
-            & (mz < plot_mz_range[1])
-            & (ims > plot_ims_range[0])
-            & (ims < plot_ims_range[1])
-        )
-        plot_ims_values = ims[top_plot_filter]
-        plot_mz_values = mz[top_plot_filter]
-        plot_intensity_values = intensity[top_plot_filter]
-
-        plt.clf()
-        plt.scatter(
-            o_plot_mz_values,
-            o_plot_ims_values,
-            c="gray",
-            s=np.sqrt(o_plot_intensity_values),
-        )
-        plt.scatter(
-            plot_mz_values,
-            plot_ims_values,
-            c=plot_intensity_values,
-            cmap="viridis",
-            s=np.sqrt(plot_intensity_values),
-            alpha=0.8,
-        )
-        if np.sum(plot_intensity_values) > 1000:
-            if random.random() > 0.01:
-                plt.pause(0.1)
-            else:
-                plt.show()
-
-    if len(intensity) > FINAL_N_PEAK_FILTER:
-        partition_indices = np.argpartition(
-            intensity,
-            -FINAL_N_PEAK_FILTER,
-        )[-FINAL_N_PEAK_FILTER:]
-
-        ims = ims[partition_indices]
-        mz = mz[partition_indices]
-        intensity = intensity[partition_indices]
-
-    return mz, intensity, ims
-
-
-# @profile
-def _collapse_seeds(
-    seeds: dict[int, list[int]],
-    intensity_values: NDArray[np.float32],
-) -> tuple[dict[int, int], set[int]]:
-    seeds = seeds.copy()
-    seed_keys = list(seeds.keys())
-    seed_order = np.argsort(-intensity_values[np.array(seed_keys)])
-    taken = set()
-    out_seeds = {}
-    MAX_ITER = 5  # noqa
-
-    for s in seed_order.tolist():
-        sk = seed_keys[s]
-        if sk in taken:
-            continue
-
-        out_seeds[sk] = set(seeds.pop(sk, {sk}))
-        curr_len = 1
-
-        for _ in range(MAX_ITER):
-            neigh_set = set(chain(*[seeds.pop(x, set()) for x in out_seeds[sk]]))
-            neigh_set = neigh_set.union(out_seeds[sk])
-            untaken = neigh_set.difference(taken)
-            taken.update(untaken)
-            out_seeds[sk].update(untaken)
-            t_curr_len = len(out_seeds[sk])
-            if curr_len == t_curr_len:
-                break
-            curr_len = t_curr_len
-
-    out_seeds = {k: v for k, v in out_seeds.items() if len(v) > 0}
-    return out_seeds, taken
-
-
-# @profile
-def collapse_ims(
-    ims_values: NDArray[np.float32],
-    mz_values: NDArray[np.float32],
-    intensity_values: NDArray[np.float32],
-    top_n: int = 500,
-    top_n_pct: float = 0.2,
-    ims_tol: float = 0.01,
-    mz_tol: float = 0.01,
-) -> dict[str, NDArray[np.float32]]:
-    """Collapses peaks with similar IMS and MZ.
-
-    Sample output
-    -------------
-    ```
-    bundled = {
-        "ims": np.zeros(..., dtype=np.float32),
-        "mz": np.zeros(..., dtype=np.float32),
-        "intensity": np.zeros(..., dtype=np.float32),
-    }
-    ```.
-    """
-    MIN_NEIGHBORS_SEED = 3  # noqa
-    assert is_sorted(mz_values)
-
-    # TODO refactor using the neighborhood module in utils
-
-    ## New implementation start
-    top_n = int(max(len(intensity_values) * top_n_pct, top_n))
-    if len(intensity_values) > top_n:
-        top_indices = np.argpartition(intensity_values, -top_n)[-top_n:]
-    else:
-        top_indices = None
-
-    elems1 = {
-        "ims": ims_values,
-        "mz": mz_values,
-    }
-    if top_indices is not None:
-        top_ims = ims_values[top_indices]
-        top_mz = mz_values[top_indices]
-        elems2 = {
-            "ims": top_ims,
-            "mz": top_mz,
-        }
-    else:
-        elems2 = None
-
-    tmp = multidim_neighbor_search(
-        elems1=elems1,
-        elems2=elems2,
-        dist_ranges={"ims": [-ims_tol, ims_tol], "mz": [-mz_tol, mz_tol]},
-        dimension_order=["mz", "ims"],
-    )
-
-    if top_indices is not None:
-        neighborhoods = {top_indices[k]: v for k, v in tmp.right_neighbors.items()}
-        for k in neighborhoods:
-            # TODO check if passing the set directly works
-            neighborhoods[k].add(k)
-    else:
-        neighborhoods = tmp.right_neighbors
-
-    # unambiguous = {k for k, v in neighborhoods.items() if len(v) == 1}
-    ambiguous = {k: v for k, v in neighborhoods.items() if len(v) > 1}
-    seeds = {k: v for k, v in ambiguous.items() if len(v) >= MIN_NEIGHBORS_SEED}
-
-    if seeds:
-        out_seeds, taken = _collapse_seeds(
-            seeds=seeds,
-            intensity_values=intensity_values,
-        )
-    else:
-        out_seeds, taken = {}, set()
-
-    ambiguous_untaken = list(set(ambiguous).difference(taken))
-    bundled = {
-        "ims": np.zeros(len(out_seeds), dtype=np.float32),
-        "mz": np.zeros(len(out_seeds), dtype=np.float32),
-        "intensity": np.zeros(len(out_seeds), dtype=np.float32),
-    }
-    for i, v in enumerate(out_seeds.values()):
-        v = list(v)
-        v_intensities = intensity_values[v]
-        # This generates the weighted average of the ims and mz
-        # as the new values for the peak.
-        bundled["intensity"][i] = (tot_intensity := v_intensities.sum())
-        bundled["ims"][i] = (ims_values[v] * v_intensities).sum() / tot_intensity
-        bundled["mz"][i] = (mz_values[v] * v_intensities).sum() / tot_intensity
-
-    # # # TODO consider whether I really want to keep ambiduous matches
-    # # # In theory I could keep only the expanded seeds.
-    # unambiguous_out = {
-    #     "ims": ims_values[list(chain(unambiguous, ambiguous_untaken))],
-    #     "mz": mz_values[list(chain(unambiguous, ambiguous_untaken))],
-    #     "intensity": intensity_values[list(chain(unambiguous, ambiguous_untaken))],
-    # }
-
-    unambiguous_out = {
-        "ims": ims_values[list(ambiguous_untaken)],
-        "mz": mz_values[list(ambiguous_untaken)],
-        "intensity": intensity_values[list(ambiguous_untaken)],
-    }
-    final = {
-        k: np.concatenate([unambiguous_out[k], bundled[k]]) for k in unambiguous_out
-    }
-
-    return final
