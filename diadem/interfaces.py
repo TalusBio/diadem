@@ -49,13 +49,11 @@ class BaseDiademInterface(ABC):
         except AttributeError:
             self.data = pl.from_pandas(data).lazy()
 
-        self.validate_columns()
+        self.validate_schema()
 
-    def validate_columns(self) -> None:
+    def validate_schema(self) -> None:
         """Verify that the required columns are present and the correct dtype."""
-        req_dtypes = {
-            c.name: _check_for_poly_dtype(c.dtype) for c in self.required_columns
-        }
+        req_dtypes = {c.name: _check_for_poly_dtype(c.dtype) for c in self.schema}
 
         dtype_errors = []
         missing_columns = set(req_dtypes.keys())
@@ -90,7 +88,7 @@ class BaseDiademInterface(ABC):
 
     @property
     @abstractmethod
-    def required_columns(self) -> Iterable[RequiredColumn]:
+    def schema(self) -> Iterable[RequiredColumn]:
         """The required columns for the underlying DataFrame."""
 
 
