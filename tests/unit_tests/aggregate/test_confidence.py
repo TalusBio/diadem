@@ -1,0 +1,1 @@
+"""Tests global FDR estimation."""

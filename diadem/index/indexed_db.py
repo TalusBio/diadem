@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import copy
 from collections import namedtuple
+from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from os import PathLike
 from pathlib import Path
-from typing import Iterable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -26,7 +26,7 @@ from diadem.index.fragment_buckets import (
     FragmentBucketList,
     PrefilteredMS1BucketList,
 )
-from diadem.utils import disabled_gc, is_sorted, make_decoy
+from diadem.utilities.utils import disabled_gc, is_sorted, make_decoy
 
 # Pre-calculating factorials so I do not need
 # to calculate them repeatedly while scoring
@@ -63,14 +63,15 @@ def _make_score_dict(ions: str) -> dict[str, dict[str, float | list[float]]]:
 
 
 SeqProperties = namedtuple(
-    "SeqProperties", "fragments, ion_series, prec_mz, proforma_seq, num_frags"
+    "SeqProperties",
+    "fragments, fragment_positions, ion_series, prec_mz, proforma_seq, num_frags",
 )
 
 
 class PeptideScore:
     """Accumulates elements to calculate the score for a peptide."""
 
-    __slots__ = ("id", "ions", "partial_scores", "tot_peaks")
+    __slots__ = ("id", "ions", "partial_scores", "tot_peaks", "peak_ids")
 
     def __init__(self, id: int, ions: str) -> None:
         """Accumulates elements to calculate the score for a peptide.
@@ -85,20 +86,28 @@ class PeptideScore:
         Examples
         --------
         >>> score = PeptideScore(1, "by")
-        >>> score.add_peak('y', mz = 234.22, intensity = 100, error = 0.01)
-        >>> score.add_peak('y', mz = 534.22, intensity = 200, error = 0.012)
+        >>> score.add_peak("y", mz=234.22, intensity=100, error=0.01, peak_id=1)
+        >>> score.add_peak("y", mz=534.22, intensity=200, error=0.012, peak_id=2)
         >>> outs = score.as_row_entry()
-        >>> [x for x in outs] # doctest: +NORMALIZE_WHITESPACE
-        ['id', 'b_intensity', 'b_npeaks', 'b_mzs', 'y_intensity', 'y_npeaks',\
-         'y_mzs', 'log_intensity_sums', 'log_factorial_peak_sum', 'mzs',\
-         'mass_errors', 'avg_abs_dm', 'med_abs_dm']
+        >>> [x for x in outs]  # doctest: +NORMALIZE_WHITESPACE
+        ['id', 'b_intensity', 'b_npeaks', 'b_mzs', 'y_intensity', \
+         'y_npeaks', 'y_mzs', 'log_intensity_sums', 'log_factorial_peak_sum', \
+         'mzs', 'mass_errors', 'avg_abs_dm', 'med_abs_dm', 'spec_indices']
         """  # noqa
         self.id: int = id
         self.ions = ions
         self.partial_scores = copy.deepcopy(_make_score_dict(ions))
         self.tot_peaks = 0
+        self.peak_ids = []
 
-    def add_peak(self, ion: str, mz: float, intensity: float, error: float) -> None:
+    def add_peak(
+        self,
+        ion: str,
+        mz: float,
+        intensity: float,
+        error: float,
+        peak_id: int,
+    ) -> None:
         """Adds a peak to the partial score.
 
         Check the class docstring for more details.
@@ -113,11 +122,15 @@ class PeptideScore:
             The intensity of the peak to add.
         error : float
             The mass error of the peak to add.
+        peak_id: int
+            Id of the peak. It is usefull to track what peaks within
+            a spectrum were a match.
         """
         self.partial_scores[ion]["intensities"] += intensity
         self.partial_scores[ion]["npeaks"] += 1
         self.partial_scores[ion]["mzs"].append(mz)
         self.partial_scores[ion]["mass_errors"].append(error)
+        self.peak_ids.append(peak_id)
         self.tot_peaks += 1
 
     def as_row_entry(self) -> dict[str, float | list[float] | int]:
@@ -150,6 +163,7 @@ class PeptideScore:
         out["mass_errors"] = mass_errors
         out["avg_abs_dm"] = np.abs(np.array(mass_errors)).mean()
         out["med_abs_dm"] = np.median(np.abs(np.array(mass_errors)))
+        out["spec_indices"] = self.peak_ids
         return out
 
 
@@ -167,7 +181,10 @@ class IndexedDb:
     """
 
     def __init__(
-        self, chunksize: int, config: DiademConfig = DEFAULT_CONFIG, name: str = "db"
+        self,
+        chunksize: int,
+        config: DiademConfig = DEFAULT_CONFIG,
+        name: str = "db",
     ) -> None:
         """Creates a new IndexedDb object.
 
@@ -215,11 +232,21 @@ class IndexedDb:
         value : list[Peptide]
             A list of peptide objects to set as the targets for the database.
         """
+        seen = set()
+        use = []
+        # Since right now my peptide implementation is not hashable,
+        # this needs to be done to make sure all targets are unique.
         for x in value:
             x.config = self.ms2ml_config
-        self._targets = value
+            if (proforma := x.to_proforma()) in seen:
+                continue
+            else:
+                use.append(x)
+                seen.add(proforma)
+
+        self._targets = use
         self._decoys = None
-        self.target_proforma = {x.to_proforma() for x in value}
+        self.target_proforma = {x.to_proforma() for x in use}
 
     @property
     def decoys(self) -> list[Peptide]:
@@ -235,8 +262,10 @@ class IndexedDb:
                 make_decoy(x) for x in tqdm(targets, desc="Generating Decoys")
             ]
             logger.info(
-                f"Generating database with {len(self.decoys)} decoys,"
-                f" and {len(self.targets)} targets"
+                (
+                    f"Generating database with {len(self.decoys)} decoys,"
+                    f" and {len(self.targets)} targets"
+                ),
             )
 
         return self._decoys
@@ -269,15 +298,18 @@ class IndexedDb:
             config=self.config.ms2ml_config,
             only_unique=True,
             enzyme=self.config.db_enzyme,
-            missed_cleavages=1,
+            missed_cleavages=self.config.db_max_missed_cleavages,
             allow_modifications=False,
             out_hook=ms1_filter,
         )
         sequences = list(adapter.parse())
+        assert len(sequences) == len({x.to_proforma() for x in sequences})
         self.targets = sequences
 
     def prefilter_ms1(
-        self, ms1_range: tuple[float, float], num_decimals: int = 3
+        self,
+        ms1_range: tuple[float, float],
+        num_decimals: int = 3,
     ) -> IndexedDb:
         """Prefilters the database.
 
@@ -304,7 +336,8 @@ class IndexedDb:
         out = copy.copy(self)
 
         out.bucketlist = self.bucketlist.prefilter_ms1(
-            *ms1_range, num_decimals=num_decimals
+            *ms1_range,
+            num_decimals=num_decimals,
         )
         out.prefiltered_ms1 = True
         out.seq_prec_mzs = self.seq_prec_mzs
@@ -358,7 +391,7 @@ class IndexedDb:
         self.seqs = seqs_df["seq_proforma"].values
 
         self.target_proforma = set(
-            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
+            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values,
         )
 
         frags_df = pd.read_parquet(
@@ -368,7 +401,7 @@ class IndexedDb:
         frags_df = frags_df[frags_df["mz"] < self.config.ion_mz_range[1]]
 
         self.target_proforma = set(
-            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values
+            (seqs_df["seq_proforma"][np.invert(seqs_df["decoy"])]).values,
         )
         self.index_from_arrays(
             frags_df["mz"].values,
@@ -376,6 +409,7 @@ class IndexedDb:
             frag_to_prec_ids=frags_df["seq_id"].values,
             prec_mzs=seqs_df["seq_mz"].values,
             prec_seqs=seqs_df["seq_proforma"].values,
+            frag_positions=frags_df["ion_position"].values,
         )
 
     # @profile
@@ -414,22 +448,42 @@ class IndexedDb:
         frag_chunk = {
             "mz": [],
             "ion_series": [],
+            "ion_position": [],
             "seq_id": [],
+            "precursor_mz": [],
         }
 
         append = False
         if seq_file_path.exists():
             append = True
-        for seq_id, (frag_mzs, ion_series, prec_mzs, prec_seqs, num_frags) in enumerate(
-            (self.seq_properties(x) for x in iter_seqs), start=start_id
-        ):
+
+        my_iter = enumerate(
+            (self.seq_properties(x) for x in iter_seqs),
+            start=start_id,
+        )
+        for seq_id, (
+            frag_mzs,
+            ion_positions,
+            ion_series,
+            prec_mzs,
+            prec_seqs,
+            num_frags,
+        ) in my_iter:
             seq_chunk["seq_id"].append(seq_id)
             seq_chunk["seq_mz"].append(prec_mzs)
             seq_chunk["seq_proforma"].append(prec_seqs)
             seq_chunk["decoy"].append(decoy)
 
-            for x, y, z in zip(frag_mzs, ion_series, [seq_id] * num_frags):
+            for w, x, x2, y, z in zip(
+                [prec_mzs] * num_frags,
+                frag_mzs,
+                ion_positions,
+                ion_series,
+                [seq_id] * num_frags,
+            ):
+                frag_chunk["precursor_mz"].append(float(w))
                 frag_chunk["mz"].append(float(x))
+                frag_chunk["ion_position"].append(x2)
                 frag_chunk["ion_series"].append(y)
                 frag_chunk["seq_id"].append(z)
 
@@ -438,8 +492,13 @@ class IndexedDb:
                     append = True
                 write_parquet(seq_file_path, pd.DataFrame(seq_chunk), append=append)
                 write_parquet(
-                    fragment_file_path, pd.DataFrame(frag_chunk), append=append
+                    fragment_file_path,
+                    pd.DataFrame(frag_chunk),
+                    append=append,
                 )
+
+                # This just flushes the chunk so next iteration starts
+                # clean.
                 for x in seq_chunk:
                     seq_chunk[x] = []
                 for x in frag_chunk:
@@ -457,11 +516,13 @@ class IndexedDb:
 
         Usage
         -----
-            > db = IndexedDb(...)
-            > db.targets = [Peptide(...), Peptide(...)]
+        ```
+            db = IndexedDb(...)
+            db.targets = [Peptide(...), Peptide(...)]
             or
-            > db.targets_from_fasta(...)
-            > db.index_from_sequences()
+            db.targets_from_fasta(...)
+            db.index_from_sequences()
+        ```
 
         Note:
         ----
@@ -480,14 +541,15 @@ class IndexedDb:
                 miniters=one_pct,
             )
 
-            frag_mzs, frag_series, prec_mzs, prec_seqs, num_frags = zip(
-                *(self.seq_properties(x) for x in iter_seqs)
+            frag_mzs, frag_position, frag_series, prec_mzs, prec_seqs, num_frags = zip(
+                *(self.seq_properties(x) for x in iter_seqs),
             )
 
             # NOTE: Changing to float16 does not give the correct result
             prec_mzs = np.array(prec_mzs, dtype="float32")
             prec_seqs = np.array(prec_seqs, dtype="object")
             frag_mzs = np.concatenate(list(frag_mzs)).astype("float32")
+            frag_position = np.concatenate(list(frag_position)).astype("int8")
             frag_series = np.concatenate(list(frag_series))
             seq_ids = np.empty_like(frag_mzs, dtype=int)
 
@@ -508,12 +570,14 @@ class IndexedDb:
             frag_to_prec_ids=seq_ids,
             prec_mzs=prec_mzs,
             prec_seqs=prec_seqs,
+            frag_positions=frag_position,
         )
 
     def index_from_arrays(
         self,
         frag_mzs: NDArray[np.float32],
         frag_series: NDArray[np.str],
+        frag_positions: NDArray[np.int8],
         frag_to_prec_ids: NDArray[np.int64],
         prec_mzs: NDArray[np.float32],
         prec_seqs: NDArray[np.str],
@@ -527,6 +591,9 @@ class IndexedDb:
             An array of fragment m/z values.
         frag_series : NDArray[np.str]
             An array of fragment ion series.
+        frag_series : NDArray[np.int8]
+            An array of the positions of the fragment ions.
+            (for example 1 for b1, 2 for b2, 3 for b3, etc.)
         frag_to_prec_ids : NDArray[np.int64]
             An array of sequence ids. (unique identifier of a peptide sequence)
         prec_mzs : NDArray[np.float32]
@@ -545,34 +612,62 @@ class IndexedDb:
         also have to be the same.
 
         """
-        assert len(prec_mzs) == len(prec_seqs)
-        assert all(len(frag_mzs) == len(x) for x in [frag_series, frag_to_prec_ids])
+        if not len(prec_mzs) == len(prec_seqs):
+            raise ValueError(
+                (
+                    "The length of the precursor mzs and the precursor sequences needs"
+                    " to be the same."
+                ),
+            )
+        if not all(
+            len(frag_mzs) == len(x)
+            for x in [frag_series, frag_to_prec_ids, frag_positions]
+        ):
+            raise ValueError(
+                (
+                    f"The length of the frag_mz {len(frag_mzs)}, frag_series"
+                    f" {len(frag_series)} and frag_to_prec_ids {len(frag_to_prec_ids)},"
+                    f" frag_positions {len(frag_positions)} need to be the same"
+                ),
+            )
+        if not len(prec_seqs) == len(np.unique(prec_seqs)):
+            raise ValueError("All precursor sequences need to be unique!")
 
         # Sorted externally by ms2 mz
         with disabled_gc():
             logger.debug(
-                f"Sorting by ms2 mz. {frag_mzs.size} total fragments (if needed)"
+                f"Sorting by ms2 mz. {frag_mzs.size} total fragments (if needed)",
             )
             if not is_sorted(frag_mzs):
-                sorted_frags, sorted_frag_series, sorted_seq_ids = sort_all(
-                    frag_mzs, frag_series, frag_to_prec_ids
+                sorted_frags, sorted_frag_series, sorted_seq_ids, frag_positions = (
+                    sort_all(
+                        frag_mzs,
+                        frag_series,
+                        frag_to_prec_ids,
+                        frag_positions,
+                    )
                 )
                 logger.debug("Done sorting (and GC), generating bucketlists")
             else:
-                logger.debug("Skippping sortinb because it is already sorted.")
-                sorted_frags, sorted_frag_series, sorted_seq_ids = (
+                logger.debug("Skippping sorting because it is already sorted.")
+                sorted_frags, sorted_frag_series, sorted_seq_ids, frag_positions = (
                     frag_mzs,
                     frag_series,
                     frag_to_prec_ids,
+                    frag_positions,
                 )
 
             del frag_mzs, frag_to_prec_ids, frag_series
 
+        # Temporary location for this, will be moved if it seems to give better results
+        # TODO
+        MIN_POSITION = 3
+
         self.bucketlist = FragmentBucketList.from_arrays(
-            fragment_mzs=sorted_frags,
-            fragment_series=sorted_frag_series,
-            precursor_ids=sorted_seq_ids,
-            precursor_mzs=prec_mzs[sorted_seq_ids],
+            fragment_mzs=sorted_frags[frag_positions >= MIN_POSITION],
+            fragment_series=sorted_frag_series[frag_positions >= MIN_POSITION],
+            precursor_ids=sorted_seq_ids[frag_positions >= MIN_POSITION],
+            precursor_mzs=prec_mzs[sorted_seq_ids[frag_positions >= MIN_POSITION]],
             chunksize=self.chunksize,
             sorting_level="ms2",
             been_sorted=True,
@@ -588,22 +683,38 @@ class IndexedDb:
     # @profile
     def seq_properties(self, x: Peptide) -> SeqProperties:
         """Internal method that extracts the peptide properties to build the index."""
-        masses = {
-            k: np.concatenate(
-                [x.ion_series(ion_type=k, charge=c) for c in x.config.ion_charges]
-            )
-            for k in x.config.ion_series
-        }
+        masses = {}
+        ion_positions = []
+        for k in x.config.ion_series:
+            ions = []
+            positions = []
+            for c in x.config.ion_charges:
+                curr_ions = x.ion_series(ion_type=k, charge=c)
+                curr_pos = np.arange(len(curr_ions)) + 1
+                ions.append(curr_ions)
+                positions.append(curr_pos)
+
+            ion_positions.extend(positions)
+            masses[k] = np.concatenate(ions)
 
         ion_series = np.concatenate(
-            [np.full_like(v, k, dtype=str) for k, v in masses.items()]
+            [np.full_like(v, k, dtype=str) for k, v in masses.items()],
         )
         masses = np.concatenate(list(masses.values()))
+        positions = np.concatenate(ion_positions)
         # TODO move this to the config ...
         mass_mask = (masses > 150) * (masses < 2000)
         masses = masses[mass_mask]
         ion_series = ion_series[mass_mask]
-        out = SeqProperties(masses, ion_series, x.mz, x.to_proforma(), len(masses))
+        positions = positions[mass_mask]
+        out = SeqProperties(
+            masses,
+            positions,
+            ion_series,
+            x.mz,
+            x.to_proforma(),
+            len(masses),
+        )
         return out
 
     # @profile
@@ -613,6 +724,8 @@ class IndexedDb:
         ms1_range: tuple[float, float],
     ) -> Iterator[tuple[int, float, str]]:
         """Yields candidate fragments that match both an ms1 and an ms2 range.
+
+        Nore: MS1 range is ignored when the database has been pre-filtered.
 
         Parameters
         ----------
@@ -631,7 +744,7 @@ class IndexedDb:
         precursor_mz: float | tuple[float, float],
         spec_mz: Iterable[float],
         spec_int: Iterable[float],
-    ) -> DataFrame:
+    ) -> DataFrame | None:
         """Scores a spectrum against the index.
 
         The result is a data frame containing all generic data required to
@@ -657,7 +770,7 @@ class IndexedDb:
                 ms1_range = precursor_mz
             else:
                 raise ValueError(
-                    "precursor_mz has to be of length 2 or a single number"
+                    "precursor_mz has to be of length 2 or a single number",
                 )
         else:
             ms1_tol = get_tolerance(
@@ -669,7 +782,7 @@ class IndexedDb:
 
         peaks = []
 
-        for fragment_mz, fragment_intensity in zip(spec_mz, spec_int):
+        for i, (fragment_mz, fragment_intensity) in enumerate(zip(spec_mz, spec_int)):
             ms2_tol = get_tolerance(
                 self.config.g_tolerances[1],
                 theoretical=fragment_mz,
@@ -680,20 +793,24 @@ class IndexedDb:
                 ms1_range=ms1_range,
                 ms2_range=(fragment_mz - ms2_tol, fragment_mz + ms2_tol),
             )
+            candidates = list(candidates)
+            dms = np.array([x[1] for x in candidates])
+            dms = np.abs(dms - fragment_mz)
+            candidates = [x for x, y in zip(candidates, dms <= ms2_tol) if y]
 
-            for seq, frag, series in candidates:
+            for (seq, _frag, series), dm in zip(candidates, dms):
                 # Should tolerances be checked here?
-                dm = frag - fragment_mz
-                if abs(dm) <= ms2_tol:
-                    peaks.append(
-                        {
-                            "seq": seq,
-                            "ion": series,
-                            "mz": fragment_mz,
-                            "intensity": fragment_intensity,
-                            "error": dm,
-                        }
-                    )
+                # IN THEORY, they should have been filtered in the past.
+                peaks.append(
+                    {
+                        "seq": seq,
+                        "ion": series,
+                        "mz": fragment_mz,
+                        "intensity": fragment_intensity,
+                        "error": dm,
+                        "peak_id": i,
+                    },
+                )
 
         peptide_ids = np.array([x["seq"] for x in peaks])
         ids, counts = np.unique(peptide_ids, return_counts=True)
@@ -749,20 +866,27 @@ class IndexedDb:
             A dataframe with the top scoring peptides.
         """
         assert len(self.seq_ids) == len(self.seqs)
+        assert len(self.seq_prec_mzs) == len(self.seqs)
         scores = self.score_arrays(
-            precursor_mz=precursor_mz, spec_mz=spec_mz, spec_int=spec_int
+            precursor_mz=precursor_mz,
+            spec_mz=spec_mz,
+            spec_int=spec_int,
         )
 
         if scores is None or len(scores) == 0:
             return None
 
         scores["Score"] = (
-            scores["log_factorial_peak_sum"] + scores["log_intensity_sums"]
+            scores["log_factorial_peak_sum"]
+            + scores["log_intensity_sums"]
+            # scores["log_intensity_sums"]
         )
         # Calculate requirements for the z score among all other proposed scores!
         score_mean = scores["Score"].mean()
         score_sd = scores["Score"].std()
 
+        # TODO reconsider if I want to do the filtering here.
+        # If i dont, I could use the precursor information as a filter ...
         scores = scores.nlargest(top_n, "Score", keep="all")
         scores.sort_values("Score", ascending=False, inplace=True)
 
@@ -774,14 +898,35 @@ class IndexedDb:
         indices_seqs_local = np.searchsorted(self.seq_ids, scores["id"].values)
         assert np.allclose(self.seq_ids[indices_seqs_local], scores["id"].values)
 
-        scores["Peptide"] = self.seqs[indices_seqs_local]
-        scores["decoy"] = [s not in self.target_proforma for s in scores["Peptide"]]
+        scores["peptide"] = self.seqs[indices_seqs_local]
+        scores["PrecursorMZ"] = self.seq_prec_mzs[indices_seqs_local]
+        scores["decoy"] = [s not in self.target_proforma for s in scores["peptide"]]
+        try:
+            assert len(np.unique(scores["peptide"])) == len(scores), np.unique(
+                scores["peptide"],
+                return_counts=True,
+            )
+        except AssertionError:
+            # There is a bug that gets detected here where a single peptide gets
+            # scored multiple times ... Usually with different IDs
+
+            # This issue happens when a sequence is also in the decoys
+            logger.error(
+                (
+                    f"{scores} has multiple peptides with the "
+                    "same id (ocasionally happens when it is both a "
+                    "target and a decoy)"
+                ),
+            )
 
         return scores
 
     # @profile
     def index_prefiltered_from_parquet(
-        self, cache_path: PathLike, min_mz: float, max_mz: float
+        self,
+        cache_path: PathLike,
+        min_mz: float,
+        max_mz: float,
     ) -> IndexedDb:
         """Generates a pre-filtered index from a parquet cache.
 
@@ -795,61 +940,76 @@ class IndexedDb:
         seqs_df = pl.scan_parquet(str(cache_path) + "/seqs.parquet")
 
         logger.info(
-            f"Filtering ms1 ranges {min_mz} to {max_mz} in database {self.name}"
+            f"Filtering ms1 ranges {min_mz} to {max_mz} in database {self.name}",
         )
-        chunk_seq_df = seqs_df.filter(pl.col("seq_mz") >= min_mz).filter(
-            pl.col("seq_mz") < max_mz
-        )
+
         joint_frags = (
-            frags_df.join(
-                chunk_seq_df.select(["seq_id", "seq_mz"]), on="seq_id", how="inner"
-            )
+            frags_df.filter(pl.col("precursor_mz") >= min_mz)
+            .filter(pl.col("precursor_mz") < max_mz)
+            # .unique(maintain_order=False)
             .sort(pl.col("mz"))
             .collect()
         )
+        logger.debug(f"Loaded {len(joint_frags)} fragments from parquet cache.")
 
         out = copy.copy(self)
         out.bucketlist = PrefilteredMS1BucketList(
             [
                 FragmentBucket(
-                    fragment_mzs=joint_frags["mz"].to_numpy(),
+                    fragment_mzs=joint_frags["mz"].to_numpy().astype(np.float32),
                     fragment_series=joint_frags["ion_series"].to_numpy(),
                     precursor_ids=joint_frags["seq_id"].to_numpy(),
-                    precursor_mzs=joint_frags["seq_mz"].to_numpy(),
+                    precursor_mzs=joint_frags["precursor_mz"]
+                    .to_numpy()
+                    .astype(np.float32),
                     sorting_level="ms2",
                     is_sorted=True,
-                )
+                ),
             ],
             num_decimal=2,
             max_frag_mz=2000,
+            progress=True,
         )
 
         out.prefiltered_ms1 = True
         # TODO change it so the only required section
         # is the proforma seqs that are in the mz range
-        chunk_seq_df_coll = chunk_seq_df.sort(pl.col("seq_id")).collect()
-        out.seq_prec_mzs = chunk_seq_df_coll["seq_mz"].to_numpy()
-        out.seqs = chunk_seq_df_coll["seq_proforma"].to_numpy()
-        out.seq_ids = chunk_seq_df_coll["seq_id"].to_numpy()
+        chunk_seq_df = (
+            seqs_df.filter(pl.col("seq_mz") >= min_mz)
+            .filter(pl.col("seq_mz") < max_mz)
+            .unique(maintain_order=False)
+            .sort(pl.col("seq_id"))
+        ).collect()
+        out.seq_prec_mzs = chunk_seq_df["seq_mz"].to_numpy().astype(np.float32)
+        out.seqs = chunk_seq_df["seq_proforma"].to_numpy()
+        out.seq_ids = chunk_seq_df["seq_id"].to_numpy()
 
+        target_set = chunk_seq_df.select(["seq_proforma", "decoy"])
         target_set = set(
-            chunk_seq_df.filter(pl.col("decoy") is False)
-            .select(["seq_proforma"])
-            .collect()["seq_proforma"]
+            target_set["seq_proforma"].to_numpy()[
+                np.invert(target_set["decoy"].to_numpy())
+            ],
         )
+
+        if len(target_set) == 0:
+            logger.warning(f"No targets were found in range {min_mz}-{max_mz}")
         out.target_proforma = target_set
         return out
 
 
 def db_from_fasta(
-    fasta: Path | str, chunksize: int, config: DiademConfig, index: bool = True
+    fasta: Path | str,
+    chunksize: int,
+    config: DiademConfig,
+    index: bool = True,
 ) -> tuple[IndexedDb, str]:
     """Created a peak index database from a fasta file.
 
     It internally checks the existance of a cache in the form of an sqlite file.
     Future implementations will allow cahching in the form of parquet.
     """
-    config_hash = config.hash()
+    index_config = config.index_config
+    config_hash = index_config.hash()
     file_cache = file_cache_dir(file=fasta)
     curr_cache = file_cache / config_hash
 

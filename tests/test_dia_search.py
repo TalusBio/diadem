@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 from ms2ml import Peptide
@@ -6,8 +7,8 @@ from diadem.config import DiademConfig
 from diadem.search.diadem import diadem_main
 
 
-@pytest.mark.parametrize("parallel", [True, False], ids=["Parallel", "NoParallel"])
-def test_dia_search_works(tmpdir, shared_datadir, parallel):
+@pytest.mark.parametrize("parallel", [False, True], ids=["NoParallel", "Parallel"])
+def test_dia_search_works_mzml(tmpdir, shared_datadir, parallel):
     """Uses simulated data to test diadem.
 
     Uses data simulated using Synthedia to check if the full search
@@ -17,14 +18,16 @@ def test_dia_search_works(tmpdir, shared_datadir, parallel):
     mzml = shared_datadir / "mzml/FGFR1_600_800_5min_group_0_sample_0.mzML"
     config = DiademConfig(run_parallelism=2 if parallel else 1)
     out = str(tmpdir / "out")
-    diadem_main(config=config, mzml_path=mzml, fasta_path=fasta, out_prefix=out)
+    diadem_main(config=config, data_path=mzml, fasta_path=fasta, out_prefix=out)
 
     expected_csv = out + ".diadem.csv"
     df = pd.read_csv(expected_csv)
-    peptides = {Peptide.from_sequence(x).stripped_sequence for x in df.Peptide.unique()}
+    df = df[np.invert(df["decoy"])]
+    peptides = {Peptide.from_sequence(x).stripped_sequence for x in df.peptide.unique()}
 
     theo_table = pd.read_csv(
-        shared_datadir / "mzml/FGFR1_600_800_5min_peptide_table.tsv", sep="\t"
+        shared_datadir / "mzml/FGFR1_600_800_5min_peptide_table.tsv",
+        sep="\t",
     )
     theo_table = theo_table[
         theo_table["MS2 chromatographic points group_0_sample_0"] > 0

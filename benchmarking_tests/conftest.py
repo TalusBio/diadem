@@ -33,7 +33,7 @@ aa_counts = {
 def make_protein(prot_length: int) -> str:
     """Makes the sequence of a fake protein of the passed length."""
     return "".join(
-        sample(list(aa_counts.keys()), counts=list(aa_counts.values()), k=prot_length)
+        sample(list(aa_counts.keys()), counts=list(aa_counts.values()), k=prot_length),
     )
 
 

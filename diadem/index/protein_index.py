@@ -62,7 +62,9 @@ class ProteinNGram:
 
     @staticmethod
     def from_fasta(
-        fasta_file: PathLike | str, ngram_size: int = 4, progress: bool = True
+        fasta_file: PathLike | str,
+        ngram_size: int = 4,
+        progress: bool = True,
     ) -> ProteinNGram:
         """Builds a protein n-gram from a fasta file.
 
@@ -84,7 +86,7 @@ class ProteinNGram:
         inv_alias = {}
 
         for i, entry in tqdm(
-            enumerate(FASTA(fasta_file)),
+            enumerate(FASTA(str(fasta_file))),
             disable=not progress,
             desc="Building peptide n-gram index",
         ):
