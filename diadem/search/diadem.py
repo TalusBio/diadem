@@ -3,20 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import time
-from os import PathLike
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import uniplot
 from joblib import Parallel, delayed
 from loguru import logger
 from pandas import DataFrame
 from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
-from diadem.data_io import read_raw_data
-from diadem.data_io.mzml import ScanGroup, StackedChromatograms
-from diadem.data_io.timstof import TimsScanGroup, TimsStackedChromatograms
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
 from diadem.search.mokapot import brew_run
 from diadem.utilities.logging import InterceptHandler
@@ -29,8 +26,8 @@ if "PLOTDIADEM" in os.environ and os.environ["PLOTDIADEM"]:
 
 
 # @profile
-def search_group(  # noqa C901 `search_group` is too complex (18)
-    group: ScanGroup | TimsScanGroup,
+def search_group(
+    group: ScanGroup,
     db: IndexedDb,
     config: DiademConfig,
     progress: bool = True,
@@ -97,21 +94,16 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
     # Results and stats related variables
     group_results = []
     intensity_log = []
-    score_log = []
     index_log = []
     fwhm_log = []
     num_peaks = 0
-    num_targets = 0
-    num_decoys = 0
 
     # Fail related variables
     num_fails = 0
-    num_consecutive_fails = 0
     curr_highest_peak_int = 2**30
     last_id = None
 
     pbar = tqdm(desc=f"Slice: {group.iso_window_name}", disable=not progress)
-    st = time.time()
 
     while True:
         if not (curr_highest_peak_int >= MIN_PEAK_INTENSITY and num_peaks <= MAX_PEAKS):
@@ -126,19 +118,14 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             )
             break
 
-        if num_consecutive_fails > MAX_NUM_CONSECUTIVE_FAILS:
-            logger.warning(
-                (
-                    "Exiting with early termination due "
-                    f"to consecurtive fails {num_consecutive_fails}"
-                ),
-            )
-            group_results = group_results[:-num_consecutive_fails]
-            break
-
-        new_stack: StackedChromatograms | TimsStackedChromatograms
-        new_stack = group.get_highest_window(**new_window_kwargs)
-
+        new_stack: StackedChromatograms = group.get_highest_window(
+            window=WINDOWSIZE,
+            min_intensity_ratio=MIN_INTENSITY_RATIO,
+            min_correlation=MIN_CORR_SCORE,
+            tolerance=MS2_TOLERANCE,
+            tolerance_unit=MS2_TOLERANCE_UNIT,
+            max_peaks=WINDOW_MAX_PEAKS,
+        )
         if new_stack.base_peak_intensity < MIN_PEAK_INTENSITY:
             break
 
@@ -176,31 +163,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                 spec_int=scoring_intensities,
                 spec_mz=new_stack.mzs,
                 top_n=1,
-                # top_n=100, use 100 when you add precursor information
             )
-
-            # TODO: implement here a
-            # partial ms2-score and then a follow up
-            # ms1 score
-
-            # if scores is not None:
-            #     rt = group.retention_times[new_stack.ref_index]
-            #     prec_intensity, prec_dms = group.get_precursor_evidence(
-            #         rt,
-            #         mzs=scores["PrecursorMZ"].values,
-            #         mz_tolerance=MS1_TOLERANCE,
-            #         mz_tolerance_unit=MS1_TOLERANCE_UNIT,
-            #     )
-            #     scores["PrecursorIntensity"] = prec_intensity
-            #     scores.drop(
-            #         scores[scores.PrecursorIntensity < 100].index,
-            #         inplace = True)
-            #     scores.reset_index(drop=True, inplace=True)
-            #     scores["rank"] = scores["Score"].rank(ascending=False, method="min")
-            #     if len(scores) == 0:
-            #         logger.debug("All scores were removed due to precursor filtering")
-            #         scores = None
-
         else:
             scores = None
 
@@ -263,6 +226,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
 
             # Scale based on the inverse of the reference chromatogram
             normalized_trace = new_stack.ref_trace / new_stack.ref_trace.max()
+            # scaling = SCALING_RATIO * (1-normalized_trace)
             scaling = 1 - normalized_trace
             # Since depending on the sampling rate the peak might be very assymetrical,
             # for now I am not mirroring the scaling
@@ -273,105 +237,58 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             group.scale_window_intensities(
                 index=new_stack.parent_index,
                 scaling=scaling,
-                window_indices=scaling_window_indices,
+                mzs=best_match_mzs,
+                window_indices=new_stack.stack_peak_indices,
+                window_mzs=new_stack.mzs,
             )
 
             if (num_peaks % DEBUG_FREQUENCY) == 0:
                 before = new_stack.ref_trace.copy()
-                try:
-                    s = stack_getter(
-                        group=group,
-                        index=new_stack.parent_index,
-                        **new_window_kwargs,
-                    )
-                    plot_vals = [before, s.ref_trace]
-                    title = (
+                s = StackedChromatograms.from_group(
+                    group=group,
+                    index=new_stack.parent_index,
+                    window=WINDOWSIZE,
+                    tolerance=db.config.g_tolerances[1],
+                    tolerance_unit=db.config.g_tolerance_units[1],
+                    min_intensity_ratio=MIN_INTENSITY_RATIO,
+                    min_correlation=MIN_CORR_SCORE,
+                    max_peaks=MAX_PEAKS,
+                )
+                plot_to_log(
+                    [before, s.ref_trace],
+                    title=(
                         f"Window before ({new_stack.ref_mz}) "
                         f"m/z and after ({s.ref_mz}) m/z"
-                    )
-                except ValueError:
-                    # This happens when all peaks are removed
-                    # ie: all in the spectrum matched a peptide
-                    # and were removed
-                    plot_vals = [before]
-                    title = f"Window before ({new_stack.ref_mz}) m/z and after (None)"
-
-                plot_to_log(
-                    plot_vals,
-                    title=title,
+                    ),
                     lines=True,
                 )
                 plot_to_log([scaling], title="Scaling")
 
             group_results.append(scores.copy())
-            score_log.append(scores["Score"].max())
-            num_consecutive_fails = 0
         else:
-            logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
-            scaling = (
-                SCALING_RATIO
-                * np.ones_like(new_stack.ref_trace)
-                * MIN_INTENSITY_SCALING
-            )
+            logger.info(f"{match_id} did not match any peptides, scaling and skipping")
+            scaling = SCALING_RATIO * np.ones_like(new_stack.ref_trace)
             group.scale_window_intensities(
                 index=new_stack.parent_index,
                 scaling=scaling,
+                mzs=new_stack.mzs,
                 window_indices=new_stack.stack_peak_indices,
+                window_mzs=new_stack.mzs,
             )
             num_fails += 1
-            num_consecutive_fails += 1
 
         num_peaks += 1
-        pbar.set_postfix(
-            {
-                "last_id": last_id,
-                "max_intensity": curr_highest_peak_int,
-                "num_fails": num_fails,
-                "num_scores": len(group_results),
-                "n_targets": num_targets,
-                "n_decoys": num_decoys,
-            },
-        )
         pbar.update(1)
-
-        # TODO move this so it is disabled without the debug flag ...
-        if ((et := time.time()) - st) >= 2:
-            from ms2ml.utils.mz_utils import get_tolerance
-
-            tot_candidates = 0
-            for mz in new_stack.mzs:
-                ms2_tol = get_tolerance(
-                    MS2_TOLERANCE,
-                    theoretical=mz,
-                    unit=MS2_TOLERANCE_UNIT,
-                )
-
-                candidates = db.bucketlist.yield_candidates(
-                    ms1_range=group.precursor_range,
-                    ms2_range=(mz - ms2_tol, mz + ms2_tol),
-                )
-                for _ in candidates:
-                    tot_candidates += 1
-
-            logger.error(
-                (
-                    f"Iteration took waaaay too long scores={scores} ;"
-                    f" {tot_candidates} total candidates for precursor range "
-                    f"{group.precursor_range} and m/z range "
-                    f"and ms2 range {(mz - ms2_tol, mz + ms2_tol)}"
-                ),
+        if (num_peaks % DEBUG_FREQUENCY) == 0:
+            logger.debug(
+                f"peak {num_peaks}/{MAX_PEAKS} max ; Intensity {curr_highest_peak_int}",
             )
-            logger.error(f"{new_stack.mzs.copy()}; len({len(new_stack.mzs)})")
-            st = et
-        else:
-            st = et
 
     pbar.close()
     plot_to_log(
         np.log1p(np.array(intensity_log)),
         title="Max (log) intensity over time",
     )
-    plot_to_log(np.array(score_log), title="Score over time")
     plot_to_log(np.array(index_log), title="Requested index over time")
     plot_to_log(np.array(fwhm_log), title="FWHM across time")
     logger.info(
@@ -382,17 +299,14 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             f"on index {last_id}"
         ),
     )
-
-    if len(group_results) == 0:
-        logger.error("No results were accumulated in this group!")
-    group_results = pd.concat(group_results) if len(group_results) else None
+    group_results = pd.concat(group_results)
     return group_results
 
 
 # @profile
 def diadem_main(
     fasta_path: Path | str,
-    data_path: Path | str,
+    mzml_path: Path | str,
     config: DiademConfig,
     out_prefix: str = "",
 ) -> None:
@@ -402,8 +316,8 @@ def diadem_main(
     ----------
     fasta_path : Path | str
         Path to the fasta file
-    data_path : Path | str
-        Path to the mzml file or .d directory.
+    mzml_path : Path | str
+        Path to the mzml file
     config : DiademConfig
         Configuration object to use for the run.
     out_prefix : str, optional
@@ -422,8 +336,8 @@ def diadem_main(
     )
 
     # set up mzml file
-    ss = read_raw_data(
-        filepath=data_path,
+    ss = SpectrumStacker(
+        mzml_file=mzml_path,
         config=config,
     )
 
@@ -437,40 +351,24 @@ def diadem_main(
                 group_results.to_parquet("latestresults.parquet")
             results.append(group_results)
     else:
-
-        @delayed
-        def setup_db_and_search(
-            precursor_range: tuple[float, float],
-            db: IndexedDb,
-            cache_location: PathLike,
-            config: DiademConfig,
-            group: ScanGroup,
-        ) -> DataFrame:
-            pfdb = db.index_prefiltered_from_parquet(cache_location, *precursor_range)
-            results = search_group(group=group, db=pfdb, config=config)
-            return results
-
         with Parallel(n_jobs=config.run_parallelism) as workerpool:
             groups = ss.get_iso_window_groups(workerpool=workerpool)
             precursor_ranges = [group.precursor_range for group in groups]
+            dbs = workerpool(
+                delayed(db.index_prefiltered_from_parquet)(cache, *prange)
+                for prange in precursor_ranges
+            )
             results = workerpool(
-                setup_db_and_search(
-                    precursor_range=prange,
-                    db=db,
-                    cache_location=cache,
-                    config=config,
-                    group=group,
-                )
-                for group, prange in zip(groups, precursor_ranges)
+                delayed(search_group)(group=group, db=pfdb, config=config)
+                for group, pfdb in zip(groups, dbs)
             )
 
-    results: pd.DataFrame = pd.concat(
-        [x for x in results if x is not None],
-        ignore_index=True,
-    )
+    results: pd.DataFrame = pd.concat(results, ignore_index=True)
 
     prefix = out_prefix + ".diadem" if out_prefix else "diadem"
-    Path(prefix).absolute().parent.mkdir(exist_ok=True)
+    prefix_dir = Path(prefix).absolute()
+
+    prefix_dir.parent.mkdir(exist_ok=True)
 
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)

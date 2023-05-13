@@ -53,7 +53,7 @@ class DiademIndexConfig:
         default=(250, 2000.0),
     )
 
-    db_enzyme: str = field(default="trypsin")
+    db_enzyme: str = field(default="[KR]")  # This needs to be a regex for mokapot.
     db_max_missed_cleavages: int = 2
     db_bucket_size: int = 2**15
 
@@ -112,7 +112,7 @@ class DiademIndexConfig:
     def hash(self) -> str:
         """Hashes the config in a reproducible manner.
 
-        Notes
+        Notes:
         -----
         Python adds a seed to the hash, therefore the has will be different
 
@@ -182,6 +182,10 @@ class DiademConfig(DiademIndexConfig):  # noqa
 
     run_scaling_ratio: float = 0.001
     run_scaling_limits: tuple[float, float] = (0.001, 0.999)
+
+    # Mokapot parameters
+    train_fdr: float = 0.01
+    eval_fdr: float = 0.01
 
     @property
     def ms2ml_config(self) -> Config:
