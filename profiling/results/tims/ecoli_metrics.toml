@@ -1,5 +1,5 @@
-NumPeptides_q_0.01 = 6904
-AvgTargetScore = 22.11691792428762
+NumPeptides_q_0_01 = 7203
+AvgTargetScore = 22.116917924287637
 TargetQ95Score = 34.39576249711483
-AvgDecoyScore = 20.221616627128082
+AvgDecoyScore = 20.22161662712808
 DecoyQ95Score = 25.000040717505303

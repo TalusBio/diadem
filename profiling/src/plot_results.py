@@ -119,7 +119,7 @@ def main():
     plt.clf()
 
     metrics = {}
-    metrics["NumPeptides_q_0.01"] = len(qvals.filter(pl.col("mokapot q-value") < 0.01))
+    metrics["NumPeptides_q_0_01"] = len(qvals.filter(pl.col("mokapot q-value") < 0.01))
     metrics["AvgTargetScore"] = df.filter(pl.col("decoy").is_not())["Score"].mean()
     metrics["TargetQ95Score"] = df.filter(pl.col("decoy").is_not())["Score"].quantile(
         0.95,
