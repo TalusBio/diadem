@@ -110,8 +110,8 @@ class RequiredColumn:
     @classmethod
     def from_iter(
         cls,
-        columns: Iterable[tuple[str, pl.DataType], ...],
-    ) -> Generator[RequiredColumn, ...]:
+        columns: Iterable[tuple[str, pl.DataType]],
+    ) -> Generator[RequiredColumn]:
         """Create required columns from an iterable.
 
         Parameters
@@ -129,7 +129,7 @@ class RequiredColumn:
 
 def _check_for_poly_dtype(
     dtype: pl.datatypes.DataType,
-) -> set[pl.datatypes.DataType, ...]:
+) -> set[pl.datatypes.DataType]:
     """Check for poly-dtypes, like floats and ints.
 
     Parameters

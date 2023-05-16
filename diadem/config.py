@@ -119,9 +119,9 @@ class DiademIndexConfig:
         Examples
         --------
         >>> DiademIndexConfig().hash()
-        '1a23e68d04576bb73dbd5e0173679e64'
+        '5cd34b65da1c229d807452acc62bcac3'
         >>> DiademIndexConfig(ion_series = "y").hash()
-        '846dbaf6adb3e2ddc5779fc5169ec675'
+        '8530fd2731f8e1d1f0c66065d441c728'
         """
         h = hashlib.md5()
         h.update(tomli_w.dumps(self.toml_dict()).encode())

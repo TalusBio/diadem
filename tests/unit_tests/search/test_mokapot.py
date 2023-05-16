@@ -44,11 +44,11 @@ def test_prepare_df(kid_fasta):
 
     expected = pd.DataFrame(
         {
-            "peptide": ["EDITH", "LES[+79.9]LIE", "LILS[+79.9]EE", "AAAR"],
+            "peptide": ["EDITH/2", "LES[+79.9]LIE/3", "LILS[+79.9]EE/3", "AAAR/2"],
             "cool_npeaks": [5, 6, 6, 4],
             "is_target": [True, True, False, True],
             "filename": "test",
-            "target_pair": ["EDITH", "LES[+79.9]LIE", "LES[+79.9]LIE", "AAAR"],
+            "target_pair": ["EDITH/2", "LES[+79.9]LIE/3", "LES[+79.9]LIE/3", "AAAR/2"],
             "peptide_length": [5, 6, 6, 4],
             "cool_npeaks_pct": [100.0, 100.0, 100.0, 100.0],
             "proteins": ["KID3", "KID1", "KID1", "KID1;KID3"],

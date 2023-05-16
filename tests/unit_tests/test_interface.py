@@ -27,7 +27,7 @@ def test_base_interface_init():
             super().__init__(data)
 
         @property
-        def required_columns(self):
+        def schema(self):
             """The required columns."""
             return [
                 RequiredColumn("foo", pl.datatypes.Float32),
@@ -62,7 +62,7 @@ def test_base_interface_from_parquet(tmp_path):
             super().__init__(data)
 
         @property
-        def required_columns(self):
+        def schema(self):
             """The required columns."""
             return [
                 RequiredColumn("foo", pl.datatypes.Float32),

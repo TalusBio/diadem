@@ -101,10 +101,10 @@ def get_ref_trace_corrs(arr: NDArray[np.float32], ref_idx: int) -> NDArray[np.fl
 
     >>> out = get_ref_trace_corrs(x, 5)
     >>> [round(x, 4) for x in out]
-    [0.8355, 0.8597, 0.8869, 0.9182, 0.9551, 0.9989, 0.9436, 0.8704, 0.7722, 0.6385]
+    [0.9208, 0.9318, 0.9442, 0.9588, 0.9767, 0.9991, 0.967, 0.9089, 0.7494, 0.5828]
     """
     arr2 = max_rolling(arr, 3, axis=-1)
-    arr2 = np.sqrt(arr2)
+    arr2 = np.sqrt(np.abs(arr2)) * np.sign(arr2)
     norm = np.linalg.norm(arr2 + 1e-5, axis=-1)
     normalized_arr = arr2 / np.expand_dims(norm, axis=-1)
     ref_trace = normalized_arr[..., ref_idx, ::1]

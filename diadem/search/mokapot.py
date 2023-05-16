@@ -68,7 +68,7 @@ def brew_run(
     targets["is_target"] = True
     decoys["is_target"] = False
     return pd.concat([targets, decoys], axis=1)
-  
+
 
 def _prepare_df(
     results: pd.DataFrame,
@@ -93,6 +93,8 @@ def _prepare_df(
     """
     # Keep only rank 1 peptides
     results = results.loc[results["rank"] == 1, :]
+    # This just makes sure that the source data is not modified
+    results = results.copy()
 
     # Remove all list columns
     non_list_cols = [c for c in results.columns if not isinstance(results[c][0], list)]
@@ -103,13 +105,18 @@ def _prepare_df(
     results = results.loc[:, non_list_cols].drop(columns="rank")
 
     results["filename"] = Path(ms_data_path).stem
+    results["peptide"] = results["peptide"].str.replace(r"^<.*>", "", regex=True)
     results["target_pair"] = results["peptide"]
     results.loc[results["decoy"], "target_pair"] = results.loc[
         results["decoy"],
         "peptide",
     ].apply(_decoy_to_target)
     results["decoy"] = ~results["decoy"]
-    stripped_peptides = results["target_pair"].str.replace("\\[.*?\\]", "", regex=True)
+    stripped_peptides = (
+        results["target_pair"]
+        .str.replace(r"\[.*?\]", "", regex=True)
+        .str.replace(r"/\d+$", "", regex=True)
+    )
     results["peptide_length"] = stripped_peptides.str.len()
 
     # Add the pct-features
@@ -145,6 +152,13 @@ def _decoy_to_target(seq: str, permutation: Iterable[int] | None = None) -> str:
     -------
     str
         The target sequence that generated the decoy sequence.
+
+    Examples
+    --------
+    >>> _decoy_to_target("LESLIEK")
+    'LEILSEK'
+    >>> _decoy_to_target("LES[+79.9]LIEK")
+    'LEILS[+79.9]EK'
     """
     seq = re.split(r"(?=[A-Z])", seq)[1:]
     if permutation is None:

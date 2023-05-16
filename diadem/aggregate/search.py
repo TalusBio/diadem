@@ -211,9 +211,10 @@ class SearchAggregator:
                 schema=self._ion_mobility.columns,
             )
 
-    def save(self) -> tuple(Path):
+    def save(self) -> tuple[Path, Path]:
         """Save the aggregated results."""
         self.peptide_path.parent.mkdir(exist_ok=True)
         pep_dfs = [self._peptides, self._ret_time, self._ion_mobility]
         pl.concat(pep_dfs, how="horizontally").write_parquet(self.peptide_path)
         self._proteins.write_parquet(self.protein_path)
+        return self.peptide_path, self.protein_path
