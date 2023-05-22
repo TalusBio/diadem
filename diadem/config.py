@@ -112,7 +112,7 @@ class DiademIndexConfig:
     def hash(self) -> str:
         """Hashes the config in a reproducible manner.
 
-        Notes:
+        Notes
         -----
         Python adds a seed to the hash, therefore the has will be different
 
@@ -171,7 +171,7 @@ class DiademConfig(DiademIndexConfig):  # noqa
     run_parallelism: int = -4
     run_deconvolute_spectra: bool = True
     run_min_peak_intensity: float = 100
-    run_debug_log_frequency: int = 50
+    run_debug_log_frequency: int = 100
     run_allowed_fails: int = 700
     run_window_size: int = 21
     run_max_peaks_per_window: int = 150

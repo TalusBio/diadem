@@ -243,36 +243,36 @@ stages:
         run_deconvolute_spectra: true
         run_max_peaks: 20000
         run_max_peaks_per_spec: 5000
-        run_max_peaks_per_window: 500
+        run_max_peaks_per_window: 150
         run_min_correlation_score: 0.5
         run_min_intensity_ratio: 0.01
         run_min_peak_intensity: 100
         run_parallelism: 1
         run_scaling_limits:
-        - 0.001
+        - 0.01
         - 0.9
-        run_scaling_ratio: 0.001
+        run_scaling_ratio: 0.01
         run_window_size: 21
         scoring_score_function: Hyperscore
     outs:
     - path: results/orbi/hela.diadem.csv
-      md5: a8d10c84ee9694b796b94fceed271bea
-      size: 28876637
+      md5: d417abd9bad5e99a459fc51c7262c19e
+      size: 141429533
     - path: results/orbi/hela_log_score_histogram_peptide.png
-      md5: e3f464612fa3dd216b493dbddce16b89
-      size: 23397
+      md5: 3097e95c49c8285066bcee861eb83302
+      size: 23750
     - path: results/orbi/hela_metrics.toml
-      md5: a453a435327861ce242b03a2ee665b6a
-      size: 167
+      md5: 85286a49b1e5553b82cfa41e3d20f880
+      size: 166
     - path: results/orbi/hela_peptide_qval.png
-      md5: 5abb6e64c723ef5ab2e22bb384f3d835
-      size: 19049
+      md5: 5de63ed0f631da7bc7e6a2708baead24
+      size: 22442
     - path: results/orbi/hela_runtime.toml
-      md5: f40451d70ab71e88e5bdfaf9d9818f18
-      size: 29
+      md5: 9ad7498396271ba7e80e4d8b7fa5bdde
+      size: 28
     - path: results/orbi/hela_score_histogram_peptide.png
-      md5: 2c4ef5bb0055f822bf5c8cf88c85e21e
-      size: 23869
+      md5: 7238a394712fd8754aba98b8b91fd2af
+      size: 24471
     - path: results/orbi/hela_score_histogram_psm.png
-      md5: 4d496191e3cca110117abb5b5f9ad478
-      size: 20897
+      md5: 9a4620f48a201ffec6a8dcbf82ab50a4
+      size: 25198

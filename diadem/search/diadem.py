@@ -110,7 +110,11 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
     curr_highest_peak_int = 2**30
     last_id = None
 
-    pbar = tqdm(desc=f"Slice: {group.iso_window_name}", disable=not progress)
+    pbar = tqdm(
+        desc=f"Slice: {group.iso_window_name}",
+        disable=not progress,
+        mininterval=1,
+    )
     st = time.time()
 
     while True:
@@ -133,7 +137,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
                     f"to consecurtive fails {num_consecutive_fails}"
                 ),
             )
-            group_results = group_results[:-num_consecutive_fails]
+            # group_results = group_results[:-num_consecutive_fails]
             break
 
         new_stack: StackedChromatograms | TimsStackedChromatograms
@@ -143,12 +147,12 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             break
 
         if last_id == new_stack.parent_index:
-            logger.debug(
-                (
-                    "Array generated on same index "
-                    f"{new_stack.parent_index} as last iteration"
-                ),
-            )
+            # logger.debug(
+            #     (
+            #         "Array generated on same index "
+            #         f"{new_stack.parent_index} as last iteration"
+            #     ),
+            # )
             num_fails += 1
         else:
             last_id = new_stack.parent_index
@@ -164,13 +168,13 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
         index_log.append(last_id)
         fwhm_log.append(new_stack.ref_fwhm)
 
-        # scoring_intensities = new_stack.trace_correlation()
+        scoring_intensities = new_stack.trace_correlation()
         # scoring_intensities = new_stack.center_intensities
-        scoring_intensities = (
-            new_stack.center_intensities * new_stack.trace_correlation()
-        )
+        # scoring_intensities = (
+        #     new_stack.center_intensities * new_stack.trace_correlation()
+        # )
 
-        if new_stack.ref_fwhm >= 3:
+        if new_stack.ref_fwhm >= 2:
             scores = db.hyperscore(
                 precursor_mz=group.precursor_range,
                 spec_int=scoring_intensities,
@@ -308,7 +312,7 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             score_log.append(scores["Score"].max())
             num_consecutive_fails = 0
         else:
-            logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
+            # logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
             scaling = (
                 SCALING_RATIO
                 * np.ones_like(new_stack.ref_trace)
@@ -402,7 +406,7 @@ def diadem_main(
     ----------
     fasta_path : Path | str
         Path to the fasta file
-    mzml_path : Path | str
+    data_path : Path | str
         Path to the mzml file
     config : DiademConfig
         Configuration object to use for the run.
@@ -433,8 +437,6 @@ def diadem_main(
         for group in ss.yield_iso_window_groups():
             group_db = db.index_prefiltered_from_parquet(cache, *group.precursor_range)
             group_results = search_group(group=group, db=group_db, config=config)
-            if group_results is not None:
-                group_results.to_parquet("latestresults.parquet")
             results.append(group_results)
     else:
 

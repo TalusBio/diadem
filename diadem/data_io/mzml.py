@@ -626,8 +626,10 @@ class SpectrumStacker:
         )
 
         if "DEBUG_DIADEM" in os.environ:
-            logger.error("RUNNING DIADEM IN DEBUG MODE (only the 4th precursor index)")
-            self.unique_precursor_windows = unique_windows[3:4].rows(named=True)
+            logger.error(
+                "RUNNING DIADEM IN DEBUG MODE (only the 4-8th precursor index)",
+            )
+            self.unique_precursor_windows = unique_windows[3:9].rows(named=True)
         else:
             self.unique_precursor_windows = unique_windows.rows(named=True)
 

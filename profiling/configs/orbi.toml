@@ -40,11 +40,11 @@ run_min_peak_intensity = 100
 run_debug_log_frequency = 50
 run_allowed_fails = 5000
 run_window_size = 21
-run_max_peaks_per_window = 500
+run_max_peaks_per_window = 150
 run_min_intensity_ratio = 0.01
 run_min_correlation_score = 0.5
-run_scaling_ratio = 0.001
+run_scaling_ratio = 0.01
 run_scaling_limits = [
-    0.001,
+    0.01,
     0.9,
 ]

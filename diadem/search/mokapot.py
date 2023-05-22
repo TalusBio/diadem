@@ -64,10 +64,10 @@ def brew_run(
     mokapot.PercolatorModel(train_fdr=config.train_fdr)
     results, _ = mokapot.brew(peptides, test_fdr=config.eval_fdr)
     targets = results.confidence_estimates["peptides"]
-    decoys = results.decoy_confidence_estiamtes["peptides"]
+    decoys = results.decoy_confidence_estimates["peptides"]
     targets["is_target"] = True
     decoys["is_target"] = False
-    return pd.concat([targets, decoys], axis=1)
+    return pd.concat([targets, decoys], axis=0)
 
 
 def _prepare_df(

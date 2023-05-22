@@ -417,12 +417,14 @@ class TimsSpectrumStacker(SpectrumStacker):
         """
         self.filepath = filepath
         self.config = config
-        self.cache_location = Path(filepath).with_suffix(".msms.parquet")
-        # self.cache_location = Path(filepath).with_suffix(".centroided.parquet")
+        # self.cache_location = Path(filepath).with_suffix(".msms.parquet")
+        # centroid = False
+        self.cache_location = Path(filepath).with_suffix(".centroided.parquet")
+        centroid = True
         if self.cache_location.exists():
             logger.info(f"Found cache file at {self.cache_location}")
         else:
-            df = get_timstof_data(filepath, centroid=False)
+            df = get_timstof_data(filepath, centroid=centroid)
             df.write_parquet(self.cache_location)
             del df
 
