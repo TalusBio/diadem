@@ -168,11 +168,15 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
         index_log.append(last_id)
         fwhm_log.append(new_stack.ref_fwhm)
 
-        scoring_intensities = new_stack.trace_correlation()
+        # scoring_intensities = new_stack.trace_correlation()
         # scoring_intensities = new_stack.center_intensities
         # scoring_intensities = (
         #     new_stack.center_intensities * new_stack.trace_correlation()
         # )
+        testcoef = np.log1p((-new_stack.trace_correlation()).argsort().argsort()) + 1
+        # >>> np.log1p((-np.array([3,2,1])).argsort().argsort()) + 1
+        # array([1.        , 1.69314718, 2.09861229])
+        scoring_intensities = np.log1p(new_stack.center_intensities) / testcoef
 
         if new_stack.ref_fwhm >= 2:
             scores = db.hyperscore(

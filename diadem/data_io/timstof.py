@@ -485,15 +485,16 @@ class TimsSpectrumStacker(SpectrumStacker):
             )
             ms_data = datafile.filter(promise).sort("rt_values")
 
+            nested_cols = [
+                "mz_values",
+                "corrected_intensity_values",
+                "mobility_values",
+            ]
+            non_nested_cols = [
+                x for x in ms_data.head().collect().columns if x not in nested_cols
+            ]
+
             if mz_range is not None:
-                nested_cols = [
-                    "mz_values",
-                    "corrected_intensity_values",
-                    "mobility_values",
-                ]
-                non_nested_cols = [
-                    x for x in ms_data.head().collect().columns if x not in nested_cols
-                ]
                 ms_data = (
                     ms_data.explode(nested_cols)
                     .filter(pl.col("mz_values").is_between(mz_range[0], mz_range[1]))

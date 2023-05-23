@@ -222,7 +222,7 @@ stages:
         - da
         g_tolerances:
         - 0.02
-        - 0.02
+        - 0.01
         ion_charges:
         - 1
         ion_mz_range:
@@ -256,23 +256,23 @@ stages:
         scoring_score_function: Hyperscore
     outs:
     - path: results/orbi/hela.diadem.csv
-      md5: d417abd9bad5e99a459fc51c7262c19e
-      size: 141429533
+      md5: 86c0dc22f4e62e20c80b47e5d489157b
+      size: 119121481
     - path: results/orbi/hela_log_score_histogram_peptide.png
-      md5: 3097e95c49c8285066bcee861eb83302
-      size: 23750
+      md5: 207ddddaf586f3153d74d4d1e104224e
+      size: 23792
     - path: results/orbi/hela_metrics.toml
-      md5: 85286a49b1e5553b82cfa41e3d20f880
-      size: 166
+      md5: bb7d7e9e4f666b5a29792c17761105ae
+      size: 165
     - path: results/orbi/hela_peptide_qval.png
-      md5: 5de63ed0f631da7bc7e6a2708baead24
-      size: 22442
+      md5: a84e444d44fd601d4d2c122dadf58878
+      size: 23407
     - path: results/orbi/hela_runtime.toml
-      md5: 9ad7498396271ba7e80e4d8b7fa5bdde
+      md5: 7f919872b332b43fba26a064ea891576
       size: 28
     - path: results/orbi/hela_score_histogram_peptide.png
-      md5: 7238a394712fd8754aba98b8b91fd2af
-      size: 24471
+      md5: a283c14b4bef3a28fdabd524ae5ce21b
+      size: 23444
     - path: results/orbi/hela_score_histogram_psm.png
-      md5: 9a4620f48a201ffec6a8dcbf82ab50a4
-      size: 25198
+      md5: f988ae0da8ee894f1e4066744dbf0f99
+      size: 25300

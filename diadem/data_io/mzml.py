@@ -642,6 +642,7 @@ class SpectrumStacker:
         self,
         precursor_window: dict[str, float],
         mz_range: None | tuple[float, float] = None,
+        remove_precursor_range: bool = True,
     ) -> dict[str : dict[str:NDArray]]:
         # TODO make this a more generic function
         # this is pretty much the same for timstof data but
@@ -655,17 +656,33 @@ class SpectrumStacker:
             )
             ms_data = datafile.filter(promise).sort("rt_values")
 
+            nested_cols = [
+                "mz_values",
+                "corrected_intensity_values",
+            ]
+            non_nested_cols = [
+                x for x in ms_data.head().collect().columns if x not in nested_cols
+            ]
             if mz_range is not None:
-                nested_cols = [
-                    "mz_values",
-                    "corrected_intensity_values",
-                ]
-                non_nested_cols = [
-                    x for x in ms_data.head().collect().columns if x not in nested_cols
-                ]
                 ms_data = (
                     ms_data.explode(nested_cols)
                     .filter(pl.col("mz_values").is_between(mz_range[0], mz_range[1]))
+                    .groupby(pl.col(non_nested_cols))
+                    .agg(nested_cols)
+                    .sort("rt_values")
+                )
+
+            if remove_precursor_range:
+                # Experimental, removes mz and intensity from the precursor range
+                ms_data = (
+                    ms_data.explode(nested_cols)
+                    .filter(
+                        (pl.col("mz_values") < precursor_window["quad_low_mz_values"])
+                        | (
+                            pl.col("mz_values")
+                            > precursor_window["quad_high_mz_values"]
+                        ),
+                    )
                     .groupby(pl.col(non_nested_cols))
                     .agg(nested_cols)
                     .sort("rt_values")
