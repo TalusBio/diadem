@@ -174,8 +174,8 @@ stages:
       md5: a5f9ec03e6ab364f6179b60079fba806
       size: 264
     - path: src/get_data.zsh
-      md5: 83ea92e422447d99c7d8c6508b5f0807
-      size: 1896
+      md5: 93a8ffd96d32f08c2977abe8ab028646
+      size: 2068
     outs:
     - path: profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
       md5: 19efb578f116318ce63f707dd0193ad9
@@ -183,6 +183,9 @@ stages:
     - path: profiling_data/230426_Hela_01_S4-E5_1_662.hdf
       md5: 02f5846145d04ff9301f78d2b6299b75
       size: 4412473566
+    - path: profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+      md5: 678d652ab60b0e4aa3c4329f22e9297b
+      size: 1696580265
     - path: profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
       md5: 764764d9da856aab25d562b4c8c835e2
       size: 17521478250

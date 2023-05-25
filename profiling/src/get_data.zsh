@@ -23,6 +23,7 @@ curl ftp.pride.ebi.ac.uk/pride/data/archive/2022/02/PXD028735/LFQ_timsTOFPro_dia
 # Human
 # Orbi
 aws s3 cp --profile mfa s3://tmp-jspp-diadem-assets/230407_Chrom_60m_1ug_v2_01.mzML.gz ./profiling_data/.
+curl ftp://massive.ucsd.edu/MSV000082805/peak/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML --output ./profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
 
 # TimsTof
 aws s3 cp --profile mfa s3://tmp-jspp-diadem-assets/230426_Hela_01.d.tar ./profiling_data/.

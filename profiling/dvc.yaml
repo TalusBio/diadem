@@ -7,10 +7,45 @@ stages:
         - Dockerfile
       outs:
         - profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
+        - profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
         - profiling_data/230426_Hela_01_S4-E5_1_662.hdf
         - profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
         - profiling_data/UP000000625_83333_crap.fasta
         - profiling_data/UP000005640_9606_crap.fasta
+
+  orbi_narrow_run_hela:
+    params:
+      - configs/orbi.toml:
+    plots:
+      - results/narrow_orbi/hela_log_score_histogram_peptide.png:
+          cache: false
+      - results/narrow_orbi/hela_score_histogram_peptide.png:
+          cache: false
+      - results/narrow_orbi/hela_peptide_qval.png:
+          cache: false
+      - results/narrow_orbi/hela_score_histogram_psm.png:
+          cache: false
+    metrics:
+      - results/narrow_orbi/hela_metrics.toml:
+          cache: false
+      - results/narrow_orbi/hela_runtime.toml:
+          cache: false
+    deps:
+      - src/run.py
+      - src/plot_results.py
+      - profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+      - profiling_data/UP000005640_9606_crap.fasta
+    outs:
+      - results/narrow_orbi/hela.diadem.csv
+    cmd: >-
+        mkdir -p results/narrow_orbi &&
+        python src/run.py
+        --config configs/orbi.toml
+        --fasta profiling_data/UP000005640_9606_crap.fasta
+        --ms_data profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+        --output results/narrow_orbi/hela
+        --threads 4 &&
+        python src/plot_results.py results/narrow_orbi --prefix hela
 
   orbi_run_hela:
     params:
