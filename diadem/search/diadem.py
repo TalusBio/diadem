@@ -174,9 +174,11 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
         #     new_stack.center_intensities * new_stack.trace_correlation()
         # )
         testcoef = np.log1p((-new_stack.trace_correlation()).argsort().argsort()) + 1
-        # >>> np.log1p((-np.array([3,2,1])).argsort().argsort()) + 1
+        # >>> np.log1p((-np.array([1,0.95,0.7])).argsort().argsort()) + 1
         # array([1.        , 1.69314718, 2.09861229])
-        scoring_intensities = np.log1p(new_stack.center_intensities) / testcoef
+        # scoring_intensities = np.log1p(new_stack.center_intensities) / testcoef
+        # scoring_intensities = np.sqrt(new_stack.center_intensities) / testcoef # 12707
+        scoring_intensities = np.sqrt(new_stack.center_intensities) / testcoef
 
         if new_stack.ref_fwhm >= 2:
             scores = db.hyperscore(
@@ -316,7 +318,10 @@ def search_group(  # noqa C901 `search_group` is too complex (18)
             score_log.append(scores["Score"].max())
             num_consecutive_fails = 0
         else:
-            # logger.debug(f"{match_id} did not match any peptides, scaling and skipping")
+            # This logging generates an extremely verbose log, consider
+            # adding a "detail" level to the logger.
+            # logger.debug(f"{match_id} did not match any peptides,
+            # scaling and skipping")
             scaling = (
                 SCALING_RATIO
                 * np.ones_like(new_stack.ref_trace)
