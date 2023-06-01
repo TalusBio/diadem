@@ -294,20 +294,20 @@ class TimsScanGroup(ScanGroup):
             raise ValueError("IMS values do not have the same lenth as the MZ values")
 
     @classmethod
-    def _elems_from_fragment_cache(cls, file):
+    def _elems_from_fragment_cache(cls, file: os.PathLike):  # noqa: ANN206
         elems, data = super()._elems_from_fragment_cache(file)
         elems["imss"] = data["imss"]
         return elems, data
 
     @classmethod
-    def _precursor_elems_from_cache(cls, file):
+    def _precursor_elems_from_cache(cls, file: os.PathLike):  # noqa: ANN206
         elems, data = super()._precursor_elems_from_cache(file)
         elems["imss"] = data["imss"]
         return elems, data
 
-    def to_cache(self, Path):
+    def to_cache(self, dir: os.PathLike) -> None:
         """Saves the group to a cache file."""
-        super().to_cache(Path)
+        super().to_cache(dir)
 
     def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.
@@ -325,6 +325,16 @@ class TimsScanGroup(ScanGroup):
         return out
 
     def precursor_dataframe(self) -> pl.DataFrame:
+        """Returns a dataframe with the metadata for the group.
+
+        The dataframe has the following columns:
+        - precursor_mzs: list of precursor mzs for each spectrum
+        - precursor_intensities: list of precursor intensities for each spectrum
+        - precursor_retention_times: precursor retention times for each spectrum
+        - precursor_start: start of the precursor range
+        - precursor_end: end of the precursor range
+        - precursor_imss: list of precursor ims values for each spectrum
+        """
         df = super().precursor_dataframe()
         df = df.with_columns(
             pl.Series(name="precursor_imss", values=self.precursor_imss),

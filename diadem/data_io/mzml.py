@@ -74,6 +74,7 @@ class ScanGroup:
 
     @property
     def cache_file_stem(self) -> str:
+        """Gets the stem the cache file should have."""
         stem = "".join(x if x.isalnum() else "_" for x in self.iso_window_name)
         return stem
 
@@ -89,7 +90,10 @@ class ScanGroup:
         fragment_df.write_parquet(dir / f"{stem}_fragments.parquet")
 
     @classmethod
-    def _elems_from_fragment_cache(cls, file):
+    def _elems_from_fragment_cache(
+        cls,
+        file: os.PathLike,
+    ) -> tuple[dict[str, NDArray], dict[str, NDArray]]:
         fragment_data = pl.read_parquet(file).to_dict()
         precursor_range = (
             fragment_data.pop("precursor_start")[0],
@@ -115,7 +119,7 @@ class ScanGroup:
 
         return out, fragment_data
 
-    def _precursor_elems_from_cache(self, file):
+    def _precursor_elems_from_cache(self, file: os.PathLike):  # noqa: ANN202
         precursor_data = pl.read_parquet(file).to_dict()
         out = {
             "precursor_mzs": precursor_data["precursor_mzs"],
@@ -123,22 +127,6 @@ class ScanGroup:
             "precursor_retention_times": precursor_data["precursor_retention_times"],
         }
         return out, precursor_data
-
-    @classmethod
-    def from_cache(cls, dir: Path, name: str) -> ScanGroup:
-        """Loads a group from a cache file."""
-        raise ValueError("Why am I here??")
-        fragment_elems, _fragment_data = cls._elems_from_fragment_cache(
-            dir / f"{name}_fragments.parquet",
-        )
-        precursor_elems, _fragment_data = cls._precursor_elems_from_cache(
-            dir / f"{name}_precursors.parquet",
-        )
-        return cls(
-            iso_window_name=name,
-            **precursor_elems,
-            **fragment_elems,
-        )
 
     def as_dataframe(self) -> pl.DataFrame:
         """Returns a dataframe with the data in the group.

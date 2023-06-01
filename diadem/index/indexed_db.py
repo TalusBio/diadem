@@ -593,6 +593,9 @@ class IndexedDb:
             An array of fragment ion series.
         frag_series : NDArray[np.int8]
             An array of the positions of the fragment ions.
+            (for example b for b1, b2 ions, y for y1, y2 ions, etc.)
+        frag_positions : NDArray[np.int8]
+            An array of the positions of the fragment ions.
             (for example 1 for b1, 2 for b2, 3 for b3, etc.)
         frag_to_prec_ids : NDArray[np.int64]
             An array of sequence ids. (unique identifier of a peptide sequence)
@@ -660,8 +663,8 @@ class IndexedDb:
             del frag_mzs, frag_to_prec_ids, frag_series
 
         # Temporary location for this, will be moved if it seems to give better results
-        # TODO
-        MIN_POSITION = 3
+        # TODO make this a parameter in the config
+        MIN_POSITION = 3  # noqa N806
 
         self.bucketlist = FragmentBucketList.from_arrays(
             fragment_mzs=sorted_frags[frag_positions >= MIN_POSITION],

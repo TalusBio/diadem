@@ -104,6 +104,7 @@ fix = true
 "**__init__.py" = ["D104"]
 # Implements a sklearn interface with X and X_hat variables/params.
 "diadem/aggregate/imputers.py" = ["N803", "N806"]
+"diadem/aggregate/rt_model.py" = ["N803", "N806"]
 
 # ANN001 Missing type annotation for function argument
 # Ignoring in the cli since it is redundant with the click options

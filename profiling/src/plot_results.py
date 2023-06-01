@@ -21,7 +21,13 @@ parser.add_argument(
 )
 
 
-def main():
+def main() -> None:
+    """Plot the results of a DIAdem run.
+
+    This script will plot the results of a DIAdem run. It will plot the PSM score
+    distribution, and a couple of other plots intended to inform the peptide
+    target/decoy distribution.
+    """
     args = parser.parse_args()
     base_dir = args.base_dir
     prefix = args.prefix

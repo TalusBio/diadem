@@ -9,7 +9,7 @@ A feature-centric DIA search engine
 
 ## Current stage
 
-Under development.
+Under development. We are happy yo take ideas and questions! Feel free to start an issue!
 
 ## Installation
 
@@ -22,15 +22,23 @@ pip install .
 
 ## Usage
 
-```shell
-```
+### Command line usage
 
+```shell
+# All commands
+diadem --help
+
+# See the help for the search functionality
+diadem search --help
+diadem --data_path {myfile.mzML/myfile.d/myfile.hdf} \
+    --fasta myfasta.fasta \
+    --out_prefix my_directory/my_results \
+    --mode dia \
+    --config myconfig.toml
+```
 
 ## Release milestones
 
-- [x] Search prototype
-- [-] Stable search engine (more as in -)
 - [ ] Quantification module
 - [ ] Stable quant module
 - [ ] RT alignment module
-- [ ]
