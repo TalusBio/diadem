@@ -112,7 +112,7 @@ stages:
         --fasta profiling_data/UP000005640_9606_crap.fasta
         --ms_data profiling_data/230426_Hela_01_S4-E5_1_662.hdf
         --output results/tims/hela
-        --threads 4 &&
+        --threads 2 &&
         python src/plot_results.py results/tims --prefix hela
 
   tims_run_ecoli:
@@ -145,7 +145,7 @@ stages:
         --fasta profiling_data/UP000000625_83333_crap.fasta
         --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
         --output results/tims/ecoli
-        --threads 4 &&
+        --threads 2 &&
         python src/plot_results.py results/tims --prefix ecoli
 
 

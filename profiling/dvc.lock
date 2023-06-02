@@ -3,7 +3,7 @@ stages:
   tims_run_hela:
     cmd: mkdir -p results/tims && python src/run.py --config configs/tims.toml --fasta
       profiling_data/UP000005640_9606_crap.fasta --ms_data profiling_data/230426_Hela_01_S4-E5_1_662.hdf
-      --output results/tims/hela --threads 4 && python src/plot_results.py results/tims
+      --output results/tims/hela --threads 2 && python src/plot_results.py results/tims
       --prefix hela
     deps:
     - path: profiling_data/230426_Hela_01_S4-E5_1_662.hdf
@@ -13,8 +13,8 @@ stages:
       md5: 6a22e753f0e35eae9e0bf3d95759d089
       size: 13676378
     - path: src/plot_results.py
-      md5: 40c50f61109cef915787809f114d4534
-      size: 4144
+      md5: 70667c33dd52947efe353bb5dd8206cc
+      size: 4392
     - path: src/run.py
       md5: f966b8a2ebd379bccd7fdb238376be5a
       size: 1096
@@ -30,7 +30,7 @@ stages:
         - da
         g_tolerances:
         - 0.02
-        - 0.02
+        - 0.01
         ion_charges:
         - 1
         ion_mz_range:
@@ -64,30 +64,30 @@ stages:
         scoring_score_function: Hyperscore
     outs:
     - path: results/tims/hela.diadem.csv
-      md5: 9d3443227ddc4d7c0c742548336e4e9a
-      size: 15179553
+      md5: 04e8692cf11b050705fb646f1dc1253f
+      size: 70067282
     - path: results/tims/hela_log_score_histogram_peptide.png
-      md5: 3b04c6c5d0871886be7c9c366cd558ec
-      size: 22777
+      md5: f1a8f652ab580d925ce480d60cdeccff
+      size: 23333
     - path: results/tims/hela_metrics.toml
-      md5: 09084e593d8fdf09d7bbd709cd2554a0
+      md5: 31bcad7edfa4703d9b3f6c5b07549cf6
       size: 166
     - path: results/tims/hela_peptide_qval.png
-      md5: c072d28be5b8841ff8d11978959600f9
-      size: 19948
+      md5: 7c43a879cb66418403efa48802518476
+      size: 18694
     - path: results/tims/hela_runtime.toml
-      md5: 64102b1326c7c90d2b8233586c30356b
-      size: 28
+      md5: f5e0b87897695e842fb36395778cf2ed
+      size: 29
     - path: results/tims/hela_score_histogram_peptide.png
-      md5: 03826bdd891ad915a2187016b8a82a6b
-      size: 21475
+      md5: 4c3764f97f078ae4de4cca01f753d411
+      size: 22297
     - path: results/tims/hela_score_histogram_psm.png
-      md5: 3e88a2f284818880ba3abddc95d7b465
-      size: 22476
+      md5: 64aa56e984dc71206ae549c23236e015
+      size: 22852
   tims_run_ecoli:
     cmd: python src/run.py --config configs/tims.toml --fasta profiling_data/UP000000625_83333_crap.fasta
       --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf --output results/tims/ecoli
-      --threads 4 && python src/plot_results.py results/tims --prefix ecoli
+      --threads 2 && python src/plot_results.py results/tims --prefix ecoli
     deps:
     - path: profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
       md5: 764764d9da856aab25d562b4c8c835e2
@@ -96,8 +96,8 @@ stages:
       md5: 1b9a2db686eb2024edbd33b7f24117ef
       size: 1891750
     - path: src/plot_results.py
-      md5: 40c50f61109cef915787809f114d4534
-      size: 4144
+      md5: 70667c33dd52947efe353bb5dd8206cc
+      size: 4392
     - path: src/run.py
       md5: f966b8a2ebd379bccd7fdb238376be5a
       size: 1096
@@ -113,7 +113,7 @@ stages:
         - da
         g_tolerances:
         - 0.02
-        - 0.02
+        - 0.01
         ion_charges:
         - 1
         ion_mz_range:
@@ -147,26 +147,26 @@ stages:
         scoring_score_function: Hyperscore
     outs:
     - path: results/tims/ecoli.diadem.csv
-      md5: 999fb7588b75653e5a245753bf4b4070
-      size: 70538015
+      md5: e4f3555d212e31b63d0591c8bd3c1335
+      size: 151843550
     - path: results/tims/ecoli_log_score_histogram_peptide.png
-      md5: df9d4b3a8a21c54ae46b476ec0697224
-      size: 23229
+      md5: a6c972607a4ff6e6d4485a00858d2ec0
+      size: 23399
     - path: results/tims/ecoli_metrics.toml
-      md5: 2378083c6eaabd6388fdd73b3af98023
-      size: 166
+      md5: 4a14dc2c77fa2a600a76df04e4697292
+      size: 167
     - path: results/tims/ecoli_peptide_qval.png
-      md5: 9d80063795191cb4433691ed5fb94aa9
-      size: 18384
+      md5: 25c071df1a94883532939c9e00b28488
+      size: 20807
     - path: results/tims/ecoli_runtime.toml
-      md5: b7bd5b6fbb274240aacd6b03b72cc944
-      size: 29
+      md5: 5acdb670b5e53f2c7066aa3d996f7a4d
+      size: 28
     - path: results/tims/ecoli_score_histogram_peptide.png
-      md5: e0edfb0a28f3c264c6de36dd1d38c9b4
-      size: 20845
+      md5: 54fec33e86b489c665aec55a6f0a38fe
+      size: 23551
     - path: results/tims/ecoli_score_histogram_psm.png
-      md5: 0b62302a8e3cbd56d80084501158cd49
-      size: 24514
+      md5: 6e2237515502378bb3b05f8fec0a82e4
+      size: 23261
   get_data:
     cmd: zsh src/get_data.zsh
     deps:

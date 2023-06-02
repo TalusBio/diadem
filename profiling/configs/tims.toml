@@ -23,7 +23,7 @@ db_max_missed_cleavages = 2
 db_bucket_size = 32768
 g_tolerances = [
     0.02,
-    0.02,
+    0.01,
 ]
 g_tolerance_units = [
     "da",

@@ -31,7 +31,7 @@ dependencies = [
     "platformdirs >= 2.6.0",
     "joblib >= 1.2.0",
     "mokapot >= 0.9.1",
-    "msflattener @ git+https://github.com/jspaezp/msflattener.git",
+    "msflattener @ git+https://github.com/jspaezp/msflattener.git@feature/signalextraction",
     "hdf5plugin",
     "polars >= 0.16.9",
     "torch >= 2.0.0",
