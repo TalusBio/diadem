@@ -2,9 +2,20 @@ import gc
 from contextlib import contextmanager
 
 import numpy as np
+import uniplot
 from loguru import logger
 from ms2ml import Peptide
 from numpy.typing import NDArray
+
+
+def plot_to_log(*args, **kwargs) -> None:  # noqa
+    """Plot to log.
+
+    Generates a plot of the passed data to the function.
+    All arguments are passed internally to uniplot.plot_to_string.
+    """
+    for line in uniplot.plot_to_string(*args, **kwargs):
+        logger.debug(line)
 
 
 @contextmanager
@@ -80,6 +91,7 @@ def make_decoy(pep: Peptide) -> Peptide:
     return pep
 
 
+# @profile
 def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
     """Gets the slide indices that include a range.
 
@@ -114,9 +126,10 @@ def get_slice_inds(arr: NDArray, minval: float, maxval: float) -> slice:
     # slice_max = np.searchsorted(arr[slice_min:], maxval, side="right")
     # slice_max = slice_min + slice_max
     i = 0
-    for i, val in enumerate(arr[slice_min:]):
+    for val in arr[slice_min:]:
         if val > maxval:
             break
+        i += 1
 
     slice_max = slice_min + i
     return slice(slice_min, slice_max)

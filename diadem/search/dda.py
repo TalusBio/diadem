@@ -13,7 +13,7 @@ from tqdm.auto import tqdm
 
 from diadem.config import DiademConfig
 from diadem.index.indexed_db import IndexedDb, db_from_fasta
-from diadem.search.search_utils import make_pin
+from diadem.search.mokapot import brew_run
 
 
 def score(db: IndexedDb, spec: Spectrum, mzml_stem: str) -> DataFrame | None:
@@ -25,7 +25,10 @@ def score(db: IndexedDb, spec: Spectrum, mzml_stem: str) -> DataFrame | None:
     if spec is None:
         return None
     spec_results = db.hyperscore(
-        spec.precursor_mz, spec_mz=spec.mz, spec_int=spec.intensity, top_n=10
+        spec.precursor_mz,
+        spec_mz=spec.mz,
+        spec_int=spec.intensity,
+        top_n=10,
     )
     if spec_results is not None:
         spec_results["ScanID"] = f"{mzml_stem}::{spec.extras['id']}"
@@ -75,7 +78,10 @@ def dda_main(
         if spec is None:
             continue
         spec_results = db.hyperscore(
-            spec.precursor_mz, spec_mz=spec.mz, spec_int=spec.intensity, top_n=10
+            spec.precursor_mz,
+            spec_mz=spec.mz,
+            spec_int=spec.intensity,
+            top_n=10,
         )
         if spec_results is not None:
             spec_results["ScanID"] = f"{mzml_stem}::{spec.extras['id']}"
@@ -86,12 +92,17 @@ def dda_main(
     logger.info(f"Writting {prefix+'.csv'} and {prefix+'.parquet'}")
     results.to_csv(prefix + ".csv", index=False)
     results.to_parquet(prefix + ".parquet", index=False)
-    make_pin(
-        results,
-        fasta_path=fasta_path,
-        mzml_path=mzml_path,
-        pin_path=prefix + ".tsv.pin",
-    )
+    try:
+        # Right now I am bypassing the mokapot results, because they break a test
+        # meant to check that no decoys are detected (which is true in that case).
+        mokapot_results = brew_run(
+            results,
+            fasta_path=fasta_path,
+            ms_data_path=mzml_path,
+        )
+        mokapot_results.to_parquet(prefix + ".peptides.parquet")
+    except ValueError as e:
+        logger.error(f"Could not run mokapot: {e}")
 
     end_time = time.time()
     elapsed_time = end_time - start_time

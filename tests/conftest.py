@@ -166,5 +166,8 @@ def albumin_peptides():
         "LVAASQAALGLLVAASQAALGL",
     ]
 
+    # ALBUMIN_PEPTIDE_SEQS = set(ALBUMIN_PEPTIDE_SEQS)
+    # I am not making this a set on purposen to make sere the runtime handles it
+    # correctly
     out = [Peptide.from_proforma_seq(f"{x}/2") for x in ALBUMIN_PEPTIDE_SEQS]
     return out

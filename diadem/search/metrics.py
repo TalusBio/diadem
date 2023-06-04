@@ -26,6 +26,34 @@ def cosinesim(x: NDArray, y: NDArray) -> NDArray:
     return out
 
 
+def max_rolling(a: np.ndarray, window: int, axis: int = 1) -> np.ndarray:
+    """Max window smoothing on a numpy array.
+
+    Parameters
+    ----------
+    a: np.ndarray
+        The array to smooth.
+    window: int
+        The size of the window.
+    axis: int
+        The axis along which to smooth.
+
+    Examples
+    --------
+    >>> foo = np.array([[1,2,3,4,5,6,7,8], [5,6,7,8,9,10,11,12]])
+    >>> max_rolling(foo, 3, -1)
+    array([[ 3,  4,  5,  6,  7,  8],
+           [ 7,  8,  9, 10, 11, 12]])
+
+    From this answer:
+    https://stackoverflow.com/a/52219082.
+    """
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+    strides = a.strides + (a.strides[-1],)
+    rolling = np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+    return np.max(rolling, axis=axis)
+
+
 def spectral_angle(x: NDArray, y: NDArray) -> NDArray:
     """Computes the spectral angle between two vectors.
 
@@ -73,15 +101,18 @@ def get_ref_trace_corrs(arr: NDArray[np.float32], ref_idx: int) -> NDArray[np.fl
 
     >>> out = get_ref_trace_corrs(x, 5)
     >>> [round(x, 4) for x in out]
-    [0.8355, 0.8597, 0.8869, 0.9182, 0.9551, 0.9989, 0.9436, 0.8704, 0.7722, 0.6385]
+    [0.9208, 0.9318, 0.9442, 0.9588, 0.9767, 0.9991, 0.967, 0.9089, 0.7494, 0.5828]
     """
-    norm = np.linalg.norm(arr + 1e-5, axis=-1)
-    normalized_arr = arr / np.expand_dims(norm, axis=-1)
+    arr2 = max_rolling(arr, 3, axis=-1)
+    arr2 = np.sqrt(np.abs(arr2)) * np.sign(arr2)
+    norm = np.linalg.norm(arr2 + 1e-5, axis=-1)
+    normalized_arr = arr2 / np.expand_dims(norm, axis=-1)
     ref_trace = normalized_arr[..., ref_idx, ::1]
     # ref_trace = np.stack([ref_trace, ref_trace[..., ::-1]]).min(axis=0)
     # ref_trace = np.stack([ref_trace, ref_trace[..., ::-1]]).min(axis=0)
     spec_angle_weights = spectral_angle(
-        normalized_arr.astype("float"), ref_trace.astype("float")
+        normalized_arr.astype("float"),
+        ref_trace.astype("float"),
     )
 
     return spec_angle_weights

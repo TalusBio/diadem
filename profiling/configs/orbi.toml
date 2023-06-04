@@ -1,0 +1,50 @@
+peptide_length_range = [
+    7,
+    25,
+]
+peptide_mz_range = [
+    400,
+    2000,
+]
+precursor_charges = [
+    2,
+    3,
+]
+ion_series = "by"
+ion_charges = [
+    1,
+]
+ion_mz_range = [
+    250,
+    2000.0,
+]
+db_enzyme = "trypsin"
+db_max_missed_cleavages = 2
+db_bucket_size = 32768
+g_tolerances = [
+    0.02,
+    0.01,
+]
+g_tolerance_units = [
+    "da",
+    "da",
+]
+g_ims_tolerance = 0.01
+g_ims_tolerance_unit = "abs"
+scoring_score_function = "Hyperscore"
+run_max_peaks = 20000
+run_max_peaks_per_spec = 5000
+run_parallelism = 1
+run_deconvolute_spectra = true
+run_min_peak_intensity = 100
+run_debug_log_frequency = 50
+run_allowed_fails = 5000
+run_window_size = 21
+run_max_peaks_per_window = 150
+run_min_intensity_ratio = 0.01
+run_min_correlation_score = 0.5
+run_scaling_ratio = 0.01
+run_scaling_limits = [
+    0.01,
+    0.9,
+]

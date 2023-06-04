@@ -1,0 +1,365 @@
+schema: '2.0'
+stages:
+  tims_run_hela:
+    cmd: mkdir -p results/tims && python src/run.py --config configs/tims.toml --fasta
+      profiling_data/UP000005640_9606_crap.fasta --ms_data profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+      --output results/tims/hela --threads 2 && python src/plot_results.py results/tims
+      --prefix hela
+    deps:
+    - path: profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+      md5: 02f5846145d04ff9301f78d2b6299b75
+      size: 4412473566
+    - path: profiling_data/UP000005640_9606_crap.fasta
+      md5: 6a22e753f0e35eae9e0bf3d95759d089
+      size: 13676378
+    - path: src/plot_results.py
+      md5: 70667c33dd52947efe353bb5dd8206cc
+      size: 4392
+    - path: src/run.py
+      md5: f966b8a2ebd379bccd7fdb238376be5a
+      size: 1096
+    params:
+      configs/tims.toml:
+        db_bucket_size: 32768
+        db_enzyme: trypsin
+        db_max_missed_cleavages: 2
+        g_ims_tolerance: 0.01
+        g_ims_tolerance_unit: abs
+        g_tolerance_units:
+        - da
+        - da
+        g_tolerances:
+        - 0.02
+        - 0.01
+        ion_charges:
+        - 1
+        ion_mz_range:
+        - 250
+        - 2000.0
+        ion_series: by
+        peptide_length_range:
+        - 7
+        - 25
+        peptide_mz_range:
+        - 400
+        - 2000
+        precursor_charges:
+        - 2
+        - 3
+        run_allowed_fails: 5000
+        run_debug_log_frequency: 50
+        run_deconvolute_spectra: true
+        run_max_peaks: 20000
+        run_max_peaks_per_spec: 5000
+        run_max_peaks_per_window: 150
+        run_min_correlation_score: 0.2
+        run_min_intensity_ratio: 0.01
+        run_min_peak_intensity: 100
+        run_parallelism: 1
+        run_scaling_limits:
+        - 0.001
+        - 0.9
+        run_scaling_ratio: 0.001
+        run_window_size: 21
+        scoring_score_function: Hyperscore
+    outs:
+    - path: results/tims/hela.diadem.csv
+      md5: 04e8692cf11b050705fb646f1dc1253f
+      size: 70067282
+    - path: results/tims/hela_log_score_histogram_peptide.png
+      md5: f1a8f652ab580d925ce480d60cdeccff
+      size: 23333
+    - path: results/tims/hela_metrics.toml
+      md5: 31bcad7edfa4703d9b3f6c5b07549cf6
+      size: 166
+    - path: results/tims/hela_peptide_qval.png
+      md5: 7c43a879cb66418403efa48802518476
+      size: 18694
+    - path: results/tims/hela_runtime.toml
+      md5: f5e0b87897695e842fb36395778cf2ed
+      size: 29
+    - path: results/tims/hela_score_histogram_peptide.png
+      md5: 4c3764f97f078ae4de4cca01f753d411
+      size: 22297
+    - path: results/tims/hela_score_histogram_psm.png
+      md5: 64aa56e984dc71206ae549c23236e015
+      size: 22852
+  tims_run_ecoli:
+    cmd: python src/run.py --config configs/tims.toml --fasta profiling_data/UP000000625_83333_crap.fasta
+      --ms_data profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf --output results/tims/ecoli
+      --threads 2 && python src/plot_results.py results/tims --prefix ecoli
+    deps:
+    - path: profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
+      md5: 764764d9da856aab25d562b4c8c835e2
+      size: 17521478250
+    - path: profiling_data/UP000000625_83333_crap.fasta
+      md5: 1b9a2db686eb2024edbd33b7f24117ef
+      size: 1891750
+    - path: src/plot_results.py
+      md5: 70667c33dd52947efe353bb5dd8206cc
+      size: 4392
+    - path: src/run.py
+      md5: f966b8a2ebd379bccd7fdb238376be5a
+      size: 1096
+    params:
+      configs/tims.toml:
+        db_bucket_size: 32768
+        db_enzyme: trypsin
+        db_max_missed_cleavages: 2
+        g_ims_tolerance: 0.01
+        g_ims_tolerance_unit: abs
+        g_tolerance_units:
+        - da
+        - da
+        g_tolerances:
+        - 0.02
+        - 0.01
+        ion_charges:
+        - 1
+        ion_mz_range:
+        - 250
+        - 2000.0
+        ion_series: by
+        peptide_length_range:
+        - 7
+        - 25
+        peptide_mz_range:
+        - 400
+        - 2000
+        precursor_charges:
+        - 2
+        - 3
+        run_allowed_fails: 5000
+        run_debug_log_frequency: 50
+        run_deconvolute_spectra: true
+        run_max_peaks: 20000
+        run_max_peaks_per_spec: 5000
+        run_max_peaks_per_window: 150
+        run_min_correlation_score: 0.2
+        run_min_intensity_ratio: 0.01
+        run_min_peak_intensity: 100
+        run_parallelism: 1
+        run_scaling_limits:
+        - 0.001
+        - 0.9
+        run_scaling_ratio: 0.001
+        run_window_size: 21
+        scoring_score_function: Hyperscore
+    outs:
+    - path: results/tims/ecoli.diadem.csv
+      md5: e4f3555d212e31b63d0591c8bd3c1335
+      size: 151843550
+    - path: results/tims/ecoli_log_score_histogram_peptide.png
+      md5: a6c972607a4ff6e6d4485a00858d2ec0
+      size: 23399
+    - path: results/tims/ecoli_metrics.toml
+      md5: 4a14dc2c77fa2a600a76df04e4697292
+      size: 167
+    - path: results/tims/ecoli_peptide_qval.png
+      md5: 25c071df1a94883532939c9e00b28488
+      size: 20807
+    - path: results/tims/ecoli_runtime.toml
+      md5: 5acdb670b5e53f2c7066aa3d996f7a4d
+      size: 28
+    - path: results/tims/ecoli_score_histogram_peptide.png
+      md5: 54fec33e86b489c665aec55a6f0a38fe
+      size: 23551
+    - path: results/tims/ecoli_score_histogram_psm.png
+      md5: 6e2237515502378bb3b05f8fec0a82e4
+      size: 23261
+  get_data:
+    cmd: zsh src/get_data.zsh
+    deps:
+    - path: Dockerfile
+      md5: a5f9ec03e6ab364f6179b60079fba806
+      size: 264
+    - path: src/get_data.zsh
+      md5: 93a8ffd96d32f08c2977abe8ab028646
+      size: 2068
+    outs:
+    - path: profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
+      md5: 19efb578f116318ce63f707dd0193ad9
+      size: 1452019888
+    - path: profiling_data/230426_Hela_01_S4-E5_1_662.hdf
+      md5: 02f5846145d04ff9301f78d2b6299b75
+      size: 4412473566
+    - path: profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+      md5: 678d652ab60b0e4aa3c4329f22e9297b
+      size: 1696580265
+    - path: profiling_data/LFQ_timsTOFPro_diaPASEF_Ecoli_01.hdf
+      md5: 764764d9da856aab25d562b4c8c835e2
+      size: 17521478250
+    - path: profiling_data/UP000000625_83333_crap.fasta
+      md5: 1b9a2db686eb2024edbd33b7f24117ef
+      size: 1891750
+    - path: profiling_data/UP000005640_9606_crap.fasta
+      md5: 6a22e753f0e35eae9e0bf3d95759d089
+      size: 13676378
+  orbi_run_hela:
+    cmd: mkdir -p results/orbi && python src/run.py --config configs/orbi.toml --fasta
+      profiling_data/UP000005640_9606_crap.fasta --ms_data profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
+      --output results/orbi/hela --threads 4 && python src/plot_results.py results/orbi
+      --prefix hela
+    deps:
+    - path: profiling_data/230407_Chrom_60m_1ug_v2_01.mzML
+      md5: 19efb578f116318ce63f707dd0193ad9
+      size: 1452019888
+    - path: profiling_data/UP000005640_9606_crap.fasta
+      md5: 6a22e753f0e35eae9e0bf3d95759d089
+      size: 13676378
+    - path: src/plot_results.py
+      md5: 40c50f61109cef915787809f114d4534
+      size: 4144
+    - path: src/run.py
+      md5: f966b8a2ebd379bccd7fdb238376be5a
+      size: 1096
+    params:
+      configs/orbi.toml:
+        db_bucket_size: 32768
+        db_enzyme: trypsin
+        db_max_missed_cleavages: 2
+        g_ims_tolerance: 0.01
+        g_ims_tolerance_unit: abs
+        g_tolerance_units:
+        - da
+        - da
+        g_tolerances:
+        - 0.02
+        - 0.01
+        ion_charges:
+        - 1
+        ion_mz_range:
+        - 250
+        - 2000.0
+        ion_series: by
+        peptide_length_range:
+        - 7
+        - 25
+        peptide_mz_range:
+        - 400
+        - 2000
+        precursor_charges:
+        - 2
+        - 3
+        run_allowed_fails: 5000
+        run_debug_log_frequency: 50
+        run_deconvolute_spectra: true
+        run_max_peaks: 20000
+        run_max_peaks_per_spec: 5000
+        run_max_peaks_per_window: 150
+        run_min_correlation_score: 0.5
+        run_min_intensity_ratio: 0.01
+        run_min_peak_intensity: 100
+        run_parallelism: 1
+        run_scaling_limits:
+        - 0.01
+        - 0.9
+        run_scaling_ratio: 0.01
+        run_window_size: 21
+        scoring_score_function: Hyperscore
+    outs:
+    - path: results/orbi/hela.diadem.csv
+      md5: 028440c372e93c1e9fb89360bee8f41e
+      size: 119421851
+    - path: results/orbi/hela_log_score_histogram_peptide.png
+      md5: bc45a78f4f79902bef3278e6f16543eb
+      size: 24313
+    - path: results/orbi/hela_metrics.toml
+      md5: 00c10ad7d7b592f627a2f49da01e27f5
+      size: 169
+    - path: results/orbi/hela_peptide_qval.png
+      md5: 5141b0fe45e76677b268e292b6ae57ab
+      size: 22108
+    - path: results/orbi/hela_runtime.toml
+      md5: e69d1cc04d3abedba9c9bc2f2bb72cf1
+      size: 28
+    - path: results/orbi/hela_score_histogram_peptide.png
+      md5: 58f46aa4eab2679beb13209eb8165ad8
+      size: 24824
+    - path: results/orbi/hela_score_histogram_psm.png
+      md5: dc444a1aac6c00b7684e0e935d5d7352
+      size: 21175
+  orbi_narrow_run_hela:
+    cmd: mkdir -p results/narrow_orbi && python src/run.py --config configs/orbi.toml
+      --fasta profiling_data/UP000005640_9606_crap.fasta --ms_data profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+      --output results/narrow_orbi/hela --threads 4 && python src/plot_results.py
+      results/narrow_orbi --prefix hela
+    deps:
+    - path: profiling_data/23aug2017_hela_serum_timecourse_4mz_narrow_3.mzML
+      md5: 678d652ab60b0e4aa3c4329f22e9297b
+      size: 1696580265
+    - path: profiling_data/UP000005640_9606_crap.fasta
+      md5: 6a22e753f0e35eae9e0bf3d95759d089
+      size: 13676378
+    - path: src/plot_results.py
+      md5: 40c50f61109cef915787809f114d4534
+      size: 4144
+    - path: src/run.py
+      md5: f966b8a2ebd379bccd7fdb238376be5a
+      size: 1096
+    params:
+      configs/orbi.toml:
+        db_bucket_size: 32768
+        db_enzyme: trypsin
+        db_max_missed_cleavages: 2
+        g_ims_tolerance: 0.01
+        g_ims_tolerance_unit: abs
+        g_tolerance_units:
+        - da
+        - da
+        g_tolerances:
+        - 0.02
+        - 0.01
+        ion_charges:
+        - 1
+        ion_mz_range:
+        - 250
+        - 2000.0
+        ion_series: by
+        peptide_length_range:
+        - 7
+        - 25
+        peptide_mz_range:
+        - 400
+        - 2000
+        precursor_charges:
+        - 2
+        - 3
+        run_allowed_fails: 5000
+        run_debug_log_frequency: 50
+        run_deconvolute_spectra: true
+        run_max_peaks: 20000
+        run_max_peaks_per_spec: 5000
+        run_max_peaks_per_window: 150
+        run_min_correlation_score: 0.5
+        run_min_intensity_ratio: 0.01
+        run_min_peak_intensity: 100
+        run_parallelism: 1
+        run_scaling_limits:
+        - 0.01
+        - 0.9
+        run_scaling_ratio: 0.01
+        run_window_size: 21
+        scoring_score_function: Hyperscore
+    outs:
+    - path: results/narrow_orbi/hela.diadem.csv
+      md5: f3fe40369d9d89feccc82753915c23a7
+      size: 85762625
+    - path: results/narrow_orbi/hela_log_score_histogram_peptide.png
+      md5: 8dd53d610c406e2f1f7af314e11cec2a
+      size: 23549
+    - path: results/narrow_orbi/hela_metrics.toml
+      md5: 3150139cbcc99118d876785bbaad7586
+      size: 169
+    - path: results/narrow_orbi/hela_peptide_qval.png
+      md5: cfb49a914b03ab05d0a59e483cd74450
+      size: 22987
+    - path: results/narrow_orbi/hela_runtime.toml
+      md5: dd2045b6e10e20c46396e9eed57b137d
+      size: 29
+    - path: results/narrow_orbi/hela_score_histogram_peptide.png
+      md5: 9cfe596a79edaec5f4c0e1138fe18c89
+      size: 23365
+    - path: results/narrow_orbi/hela_score_histogram_psm.png
+      md5: 733f1a066d3a85055f2b4dac8c176590
+      size: 20878
