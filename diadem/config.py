@@ -23,6 +23,14 @@ MassError = Literal["da", "ppm"]
 # TODO add chunksize to config ... and use it ...
 
 
+def _default_static_mods() -> str:
+    return ("[+57.0216]@C",)
+
+
+def _default_variable_mods() -> dict[str, list[str]]:
+    return {"[+15.9949]": ["M"]}
+
+
 @dataclass(frozen=True, eq=True)
 class DiademIndexConfig:
     """Configuration to generate an index.
@@ -56,8 +64,10 @@ class DiademIndexConfig:
     db_enzyme: str = field(default="[KR]")  # This needs to be a regex for mokapot.
     db_max_missed_cleavages: int = field(default=2)
     db_bucket_size: int = field(default=2**15)
-    db_static_mods: tuple[str] = field(default=("[+57.0216]@C",))
-    db_variable_mods: dict[str, list[str]] = field(default={"[+15.9949]": ["M"]})
+    db_static_mods: tuple[str] = field(default_factory=_default_static_mods)
+    db_variable_mods: dict[str, list[str]] = field(
+        default_factory=_default_variable_mods,
+    )
 
     def log(self, logger: Logger, level: str = "INFO") -> None:
         """Logs all the configurations using the passed logger."""
@@ -118,9 +128,9 @@ class DiademIndexConfig:
         Examples
         --------
         >>> DiademIndexConfig().hash()
-        '5cd34b65da1c229d807452acc62bcac3'
+        '97ca5489d05d9315b551104226300e0d'
         >>> DiademIndexConfig(ion_series = "y").hash()
-        '8530fd2731f8e1d1f0c66065d441c728'
+        '39e49619c492bd428001e4521320281f'
         """
         h = hashlib.md5()
         h.update(tomli_w.dumps(self.toml_dict()).encode())
