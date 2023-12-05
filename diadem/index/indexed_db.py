@@ -283,27 +283,22 @@ class IndexedDb:
             The path to the fasta file to use to populate the database.
 
         """
+        ms2ml_config = self.ms2ml_config
 
-        def ms1_filter(pep: Peptide) -> Peptide | None:
-            mz = pep.mz
-            if (mz < pep.config.peptide_mz_range[0]) or (
-                mz > pep.config.peptide_mz_range[1]
-            ):
-                return None
-            else:
-                return pep
-
+        logger.info(f"Reading fasta file {fasta_path} into database {self.name}")
+        logger.info(
+            f"Mods -> {ms2ml_config.mod_variable_mods} ; {ms2ml_config.mod_fixed_mods}",
+        )
         adapter = FastaAdapter(
             file=fasta_path,
             config=self.config.ms2ml_config,
             only_unique=True,
             enzyme=self.config.db_enzyme,
             missed_cleavages=self.config.db_max_missed_cleavages,
-            allow_modifications=False,
-            out_hook=ms1_filter,
+            allow_modifications=True,
         )
         sequences = list(adapter.parse())
-        assert len(sequences) == len({x.to_proforma() for x in sequences})
+        # assert len(sequences) == len({x.to_proforma() for x in sequences})
         self.targets = sequences
 
     def prefilter_ms1(

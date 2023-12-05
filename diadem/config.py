@@ -47,7 +47,7 @@ class DiademIndexConfig:
         default="by",
     )
     ion_charges: tuple[int, ...] = field(
-        default=(1, 2),
+        default=(1,),
     )
     ion_mz_range: tuple[float, float] = field(
         default=(250, 2000.0),
@@ -56,9 +56,8 @@ class DiademIndexConfig:
     db_enzyme: str = field(default="[KR]")  # This needs to be a regex for mokapot.
     db_max_missed_cleavages: int = 2
     db_bucket_size: int = 2**15
-
-    # Variable mods
-    # Static mods
+    db_static_mods = ("[+57.0216]@C",)
+    db_variable_mods = {"[+15.9949]": ["M"]}
 
     def log(self, logger: Logger, level: str = "INFO") -> None:
         """Logs all the configurations using the passed logger."""
@@ -142,6 +141,11 @@ class DiademIndexConfig:
             ion_series=self.ion_series,
             ion_charges=self.ion_charges,
             peptide_mz_range=self.peptide_mz_range,
+            mod_mode="delta_mass",
+            mod_fixed_mods=self.db_static_mods,
+            mod_variable_mods=self.db_variable_mods,
+            encoding_mod_alias=(),
+            fragment_positions=[1 + x for x in range(self.peptide_length_range[1])],
         )
         return conf
 
@@ -202,6 +206,11 @@ class DiademConfig(DiademIndexConfig):  # noqa
             ion_series=self.ion_series,
             ion_charges=self.ion_charges,
             peptide_mz_range=self.peptide_mz_range,
+            mod_mode="delta_mass",
+            mod_fixed_mods=self.db_static_mods,
+            mod_variable_mods=self.db_variable_mods,
+            encoding_mod_alias=(),
+            fragment_positions=[1 + x for x in range(self.peptide_length_range[1])],
         )
         return conf
 
