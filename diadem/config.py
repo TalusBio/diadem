@@ -56,8 +56,8 @@ class DiademIndexConfig:
     db_enzyme: str = field(default="[KR]")  # This needs to be a regex for mokapot.
     db_max_missed_cleavages: int = 2
     db_bucket_size: int = 2**15
-    db_static_mods = ("[+57.0216]@C",)
-    db_variable_mods = {"[+15.9949]": ["M"]}
+    db_static_mods: tuple[str] = ("[+57.0216]@C",)
+    db_variable_mods: dict[str, list[str]] = {"[+15.9949]": ["M"]}
 
     def log(self, logger: Logger, level: str = "INFO") -> None:
         """Logs all the configurations using the passed logger."""
